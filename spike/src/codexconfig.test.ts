@@ -1,9 +1,10 @@
-// Purpose: P1-1 — the managed config.toml settings are inserted and removed without touching anything else.
+// Purpose: P1-1/P2 — the managed config.toml settings and the .env NO_PROXY block are inserted and removed
+// without touching anything else.
 // Input: synthetic config texts; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { disableProxy, enableProxy, proxyStatus } from "./codexconfig.ts";
+import { coversLoopback, disableProxy, enableNoProxy, enableProxy, noProxyStatus, noProxyValue, proxyStatus } from "./codexconfig.ts";
 
 const URL = "http://localhost:17891/backend-api/codex";
 const withFeatures = 'model = "gpt-6-sol"\n\n[features]\nview_image = true\n\n[mcp_servers.demo]\ncommand = "node"\n';
@@ -94,4 +95,37 @@ test("a user's own respect_system_proxy is respected", () => {
 
 test("disable without managed settings changes nothing", () => {
   assert.deepEqual(disableProxy(withFeatures), { text: withFeatures, changed: false });
+});
+
+const LOOP = "localhost,127.0.0.1,::1";
+
+test(".env: the NO_PROXY block goes first and disable restores the file byte for byte", () => {
+  const samples = ["", "OPENAI_API_KEY=not-a-real-key\n", "\uFEFFA=1\r\nB=2\r\n", "# only a comment"];
+  for (const sample of samples) {
+    const { text, changed } = enableNoProxy(sample, LOOP);
+    assert.equal(changed, true);
+    assert.equal(noProxyStatus(text).value, LOOP);
+    assert.match(text.replace(/^\uFEFF/, ""), /^# >>> codex-attachment-manager/);
+    assert.equal(disableProxy(text).text, sample);
+  }
+  assert.equal(disableProxy(enableNoProxy("", LOOP).text).text, "", "a file that only held the block becomes empty");
+});
+
+test(".env: enabling twice changes nothing, and a user's own NO_PROXY is never overridden", () => {
+  const once = enableNoProxy("A=1\n", LOOP).text;
+  assert.deepEqual(enableNoProxy(once, LOOP), { text: once, changed: false });
+  for (const own of ["NO_PROXY=corp.example\n", "no_proxy = x\n", "export NO_PROXY=y\n"]) {
+    assert.throws(() => enableNoProxy(own, LOOP), /already sets NO_PROXY/);
+    assert.equal(noProxyStatus(own).conflict, true);
+  }
+  assert.equal(noProxyStatus("# NO_PROXY=commented out\n").conflict, false);
+});
+
+test("NO_PROXY keeps the user's entries and adds only the missing loopback hosts", () => {
+  assert.equal(noProxyValue(null), LOOP);
+  assert.equal(noProxyValue(".corp.example, localhost"), ".corp.example,localhost,127.0.0.1,::1");
+  assert.equal(coversLoopback(LOOP), true);
+  assert.equal(coversLoopback("*"), true);
+  assert.equal(coversLoopback("localhost,127.0.0.1"), false);
+  assert.equal(coversLoopback(null), false);
 });
