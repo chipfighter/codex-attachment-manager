@@ -1,6 +1,8 @@
 // Purpose: the engine — local proxy between Codex and the ChatGPT backend. P1: HTTP requests and WebSocket upgrades
 // are forwarded byte for byte. P2: requests of threads with unchecked images are rewritten. P3: one instance per
 // machine, exits once no Codex process is left, and keeps per-thread statistics of the latest request.
+// P4: the statistics also name the images each full request carried (the panel's size baseline), and note a
+// WebSocket turn that kept running after images were unchecked (it cannot be rewritten).
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
@@ -8,7 +10,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
 import { join } from "node:path";
@@ -18,8 +20,9 @@ import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { codexHome } from "./codexconfig.ts";
 import { DEFAULT_PORT, ENGINE_SERVICE, engineHealth, watchForCodex } from "./engine.ts";
-import type { ImageRef } from "./images.ts";
-import { dataDir, proxyLogDirOf, requestStatsDirOf } from "./paths.ts";
+import { findImages, type ImageRef } from "./images.ts";
+import { dataDir, proxyLogDirOf } from "./paths.ts";
+import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
 import { effectiveSelection, selectionDir } from "./selection.ts";
 import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
@@ -27,7 +30,6 @@ import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.t
 type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade", "host"]);
-const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Outbound proxy: environment first, then the Windows per-user setting; NO_PROXY is honoured for the upstream host.
 export function outboundProxy(env = process.env, windowsSetting = readWindowsProxy): { host: string; port: number } | null {
@@ -130,13 +132,9 @@ function log(entry: Json): void {
   appendFileSync(join(dir, `${new Date().toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(entry)}\n`);
 }
 
-// P3: the latest /responses request of each thread, for the panel's "what was sent" view. Metadata only.
-export function recordRequest(threadId: string | null, stats: Json, dir = requestStatsDirOf()): void {
-  if (!threadId || !THREAD_ID.test(threadId)) return;
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `${threadId}.json`);
-  writeFileSync(`${file}.tmp`, JSON.stringify(stats, null, 2));
-  renameSync(`${file}.tmp`, file);
+// The images a request carried and the base64 characters each took, under the same keys as the thread index.
+export function imageSizesOf(input: Json[]): Record<string, number> {
+  return Object.fromEntries(findImages(input).map((ref) => [ref.key, ref.base64Chars]));
 }
 
 // P2-1 debugging aid for synthetic test threads only: the request with every inline image reduced to its hash and size.
@@ -232,12 +230,20 @@ async function main(): Promise<void> {
   }
   // Open WebSocket connections per thread. Over WebSocket Codex only sends new items and the server keeps the rest,
   // so a thread with unchecked images must move to HTTP: its idle connections are closed, and its next upgrade gets 426.
-  const live = new Map<string, Set<{ client: Duplex; socket: tls.TLSSocket; last: number; closedForSelection: boolean }>>();
+  type Live = { client: Duplex; socket: tls.TLSSocket; last: number; closedForSelection: boolean; activeWhileUnchecked: boolean; path: string; identity: Json };
+  const live = new Map<string, Set<Live>>();
   setInterval(() => {
     for (const [threadId, connections] of live) {
       if (!hasUnchecked(threadId)) continue;
       for (const connection of connections) {
-        if (Date.now() - connection.last < 1500) continue;
+        if (Date.now() - connection.last < 1500) {
+          // A turn still running here keeps the images the server already holds; noted once so the panel can say so.
+          if (!connection.activeWhileUnchecked) {
+            connection.activeWhileUnchecked = true;
+            recordRequest(threadId, { at: new Date().toISOString(), transport: "websocket", event: "active-while-unchecked", path: connection.path, ...connection.identity });
+          }
+          continue;
+        }
         connection.closedForSelection = true;
         connection.socket.destroy();
         connection.client.destroy();
@@ -269,10 +275,13 @@ async function main(): Promise<void> {
       const body = Buffer.concat(chunks);
       const decoded = req.method === "POST" ? decodeBody(body, req.headers["content-encoding"] as string | undefined) : null;
       let details: Json = {};
+      let imageSizes: Record<string, number> | null = null;
       if (decoded) {
         try {
           const json = JSON.parse(decoded.toString("utf8"));
           details = describeBody(path, json);
+          // Measured on the body as Codex sent it, before any rewrite: the panel's "everything sent" baseline.
+          if (/\/responses$/.test(path) && Array.isArray(json.input)) imageSizes = imageSizesOf(json.input);
           if (dumpDir && /\/responses$/.test(path)) {
             mkdirSync(dumpDir, { recursive: true });
             const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^(x-codex|session_id|conversation_id|openai-beta|content-)/.test(name)));
@@ -282,7 +291,8 @@ async function main(): Promise<void> {
       }
       const entry = { at: new Date(started).toISOString(), id, transport: "http", method: req.method, path, status, requestBytes, decodedBytes: decoded?.length ?? null, contentEncoding: req.headers["content-encoding"] ?? null, responseBytes, ms: Date.now() - started, ...identity, ...details, ...extra, error: error ?? null };
       log(entry);
-      if (/\/responses$/.test(path)) recordRequest(identity.threadId, entry);
+      // Image keys go to the per-thread statistics only, not to the log.
+      if (/\/responses$/.test(path)) recordRequest(identity.threadId, imageSizes ? { ...entry, imageSizes } : entry);
     };
     // body === null streams the request through unchanged.
     const send = (headers: Record<string, string | string[]>, body: Buffer | null) => connectUpstream(via).then((socket) => {
@@ -335,7 +345,7 @@ async function main(): Promise<void> {
     let down = 0;
     let upstreamStatus: string | null = null;
     connectUpstream(via).then((socket) => {
-      const connection = { client, socket, last: Date.now(), closedForSelection: false };
+      const connection: Live = { client, socket, last: Date.now(), closedForSelection: false, activeWhileUnchecked: false, path, identity };
       if (identity.threadId) {
         if (!live.has(identity.threadId)) live.set(identity.threadId, new Set());
         live.get(identity.threadId)!.add(connection);
@@ -363,7 +373,7 @@ async function main(): Promise<void> {
         socket.destroy();
         client.destroy();
         if (identity.threadId) live.get(identity.threadId)?.delete(connection);
-        const entry = { at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, ...identity };
+        const entry = { at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, activeWhileUnchecked: connection.activeWhileUnchecked, ...identity };
         log(entry);
         recordRequest(identity.threadId, entry);
       };

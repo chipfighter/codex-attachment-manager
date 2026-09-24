@@ -10,7 +10,7 @@ import { decodePng } from "./png.ts";
 
 type Json = Record<string, any>;
 export type IndexedImage = ImageRef & { id: string; turn: number | null; bytes: number; pixelSha256: string | null };
-export type ThreadIndex = { threadId: string; images: IndexedImage[]; byKey: Map<string, IndexedImage>; turns: number };
+export type ThreadIndex = { threadId: string; images: IndexedImage[]; byKey: Map<string, IndexedImage>; turns: number; turnNumbers: Map<string, number> };
 type Parsed = { offset: number; type: string; payload: Json };
 type FileCache = { size: number; mtimeMs: number; parsedTo: number; records: Parsed[] };
 
@@ -129,7 +129,7 @@ export function buildIndex(threadId: string, history: Parsed[]): ThreadIndex {
     const twin = images.find((other) => other.name && (other.contentId === entry.contentId || (entry.pixelSha256 !== null && other.pixelSha256 === entry.pixelSha256)));
     if (twin) entry.name = twin.name;
   }
-  return { threadId, images, byKey, turns: turnNumbers.size };
+  return { threadId, images, byKey, turns: turnNumbers.size, turnNumbers };
 }
 
 // The first line alone (session_meta can be long), read in chunks without parsing the rest of the file.
