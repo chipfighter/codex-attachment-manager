@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
+import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import zlib from "node:zlib";
@@ -123,7 +124,7 @@ function main(): void {
   const via = outboundProxy();
   let sequence = 0;
 
-  const server = http.createServer((req, res) => {
+  const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/__cam/health") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
@@ -168,9 +169,9 @@ function main(): void {
       res.end(`codex-attachment-manager proxy: cannot reach ${UPSTREAM_HOST}`);
       finish(String(error));
     });
-  });
+  };
 
-  server.on("upgrade", (req, client, head) => {
+  const onUpgrade = (req: http.IncomingMessage, client: Duplex, head: Buffer) => {
     const id = ++sequence;
     const started = Date.now();
     let up = head.length;
@@ -205,12 +206,18 @@ function main(): void {
       client.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
       log({ at: new Date(started).toISOString(), id, transport: "websocket", path: req.url, error: String(error), ...requestIdentity(req.headers) });
     });
-  });
+  };
 
-  server.requestTimeout = 0;
-  server.listen(port, "127.0.0.1", () => {
-    console.log(JSON.stringify({ listening: `http://127.0.0.1:${port}/backend-api/codex`, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
-  });
+  // Codex may resolve "localhost" to either loopback address, so listen on both (and only on loopback).
+  for (const host of ["127.0.0.1", "::1"]) {
+    const server = http.createServer(onRequest);
+    server.on("upgrade", onUpgrade);
+    server.requestTimeout = 0;
+    server.on("error", (error) => console.error(JSON.stringify({ host, error: String(error) })));
+    server.listen(port, host, () => {
+      console.log(JSON.stringify({ listening: `http://${host.includes(":") ? `[${host}]` : host}:${port}/backend-api/codex`, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
+    });
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
