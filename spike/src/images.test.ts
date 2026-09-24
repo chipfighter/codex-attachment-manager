@@ -73,3 +73,13 @@ test("image sizes come from PNG, GIF and JPEG headers", () => {
   const jpeg = Buffer.from("ffd8" + "ffe00004" + "0000" + "ffc0000b08012c0190030100", "hex");
   assert.deepEqual(imageSize(jpeg), { width: 400, height: 300 });
 });
+
+test("view_image through a variable path is still a viewed image; single-quoted inline paths are read", () => {
+  const items = [
+    { type: "custom_tool_call", call_id: "c1", name: "exec", input: "const paths = ['C:\\\\a.png'];\nconst calls = paths.map(path => tools.view_image({path, detail: 'original'}));" },
+    { type: "custom_tool_call_output", id: "ctco_1", call_id: "c1", output: [{ type: "input_image", image_url: url(red) }] },
+    { type: "custom_tool_call", call_id: "c2", name: "exec", input: "await tools.view_image({ path: 'D:\\\\x\\\\e.png' })" },
+    { type: "custom_tool_call_output", id: "ctco_2", call_id: "c2", output: [{ type: "input_image", image_url: url(blue) }] },
+  ];
+  assert.deepEqual(findImages(items).map((r) => [r.kind, r.name]), [["view", null], ["view", "e.png"]]);
+});

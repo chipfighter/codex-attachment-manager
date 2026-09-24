@@ -61,3 +61,21 @@ test("a later segment inherits its base segment only up to history_base.end_byte
     line("session_meta", { id: THREAD, history_base: { thread_id: THREAD, end_byte_offset: Buffer.byteLength(first) } }) + turn("t2") + upload("msg_2", "t2", "b.png", blue));
   assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => [i.id, i.name]), [["IMG-001", "a.png"], ["IMG-002", "b.png"]]);
 });
+
+test("a fork inherits its parent's history up to the fork point, read from the parent's own file", () => {
+  const { dir, day } = sessions();
+  const PARENT = "01a0d301-0000-7000-8000-0000000000aa";
+  const parentHead = line("session_meta", { id: PARENT }) + turn("t1") + upload("msg_1", "t1", "a.png", red);
+  writeFileSync(join(day, `rollout-2026-09-24T09-00-00-${PARENT}.jsonl`), parentHead + turn("t2") + upload("msg_p", "t2", "parent-only.png", blue));
+  writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
+    line("session_meta", { id: THREAD, history_base: { thread_id: PARENT, end_byte_offset: Buffer.byteLength(parentHead) } }) + turn("t3") + upload("msg_2", "t3", "b.png", blue));
+  assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => [i.id, i.name, i.turn]), [["IMG-001", "a.png", 1], ["IMG-002", "b.png", 2]]);
+  assert.deepEqual(loadThreadIndex(dir, PARENT).images.map((i) => i.name), ["a.png", "parent-only.png"], "the parent is unaffected");
+});
+
+test("an unnamed image takes the name of an identical named one", () => {
+  const { dir, day } = sessions();
+  const viewed = line("response_item", { type: "custom_tool_call_output", id: "ctco_1", call_id: "c1", output: [{ type: "input_image", image_url: url(red) }] });
+  writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`), line("session_meta", { id: THREAD }) + turn("t1") + upload("msg_1", "t1", "a.png", red) + viewed);
+  assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => [i.id, i.kind, i.name]), [["IMG-001", "upload", "a.png"], ["IMG-002", "tool", "a.png"]]);
+});
