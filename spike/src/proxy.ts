@@ -185,7 +185,6 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
     replaced: report.replaced.map(({ key: _key, ...rest }) => rest),
     locked: report.locked,
     sentImageHashes: report.sentContentIds.map((id) => id.slice(0, 16)),
-    roundTripExact: JSON.stringify(json) === text,
   };
   if (!report.replaced.length) return { body: original, report: summary };
   json.input = items;
