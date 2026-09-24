@@ -1,10 +1,10 @@
-// Purpose: P1-1/P2 — the managed config.toml settings and the .env NO_PROXY block are inserted and removed
-// without touching anything else.
+// Purpose: P1-1/P2/P3 — the managed config.toml settings (proxy blocks and the panel's MCP server table) and the
+// .env NO_PROXY block are inserted and removed without touching anything else.
 // Input: synthetic config texts; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { coversLoopback, disableProxy, enableNoProxy, enableProxy, noProxyStatus, noProxyValue, proxyStatus } from "./codexconfig.ts";
+import { coversLoopback, disableMcpServer, disableProxy, enableMcpServer, enableNoProxy, enableProxy, noProxyStatus, noProxyValue, proxyStatus } from "./codexconfig.ts";
 
 const URL = "http://localhost:17891/backend-api/codex";
 const withFeatures = 'model = "gpt-6-sol"\n\n[features]\nview_image = true\n\n[mcp_servers.demo]\ncommand = "node"\n';
@@ -128,4 +128,31 @@ test("NO_PROXY keeps the user's entries and adds only the missing loopback hosts
   assert.equal(coversLoopback("*"), true);
   assert.equal(coversLoopback("localhost,127.0.0.1"), false);
   assert.equal(coversLoopback(null), false);
+});
+
+const NODE = "C:\\Program Files\\nodejs\\node.exe";
+const SCRIPT = "D:\\tools\\cam\\panel-probe.ts";
+
+test("MCP server: the table goes at the end with Windows paths escaped, and disable restores the file byte for byte", () => {
+  const { text, changed } = enableMcpServer(withFeatures, "cam_probe", NODE, [SCRIPT]);
+  assert.equal(changed, true);
+  assert.ok(text.startsWith(withFeatures), "everything before the block is untouched");
+  assert.match(text, /\[mcp_servers\.cam_probe\]\ncommand = "C:\\\\Program Files\\\\nodejs\\\\node\.exe"\nargs = \["D:\\\\tools\\\\cam\\\\panel-probe\.ts"\]\ndefault_tools_approval_mode = "approve"\n# <<< codex-attachment-manager <<<\n$/);
+  for (const sample of [withFeatures, withoutFeatures, "", "\uFEFF" + withFeatures.replaceAll("\n", "\r\n")]) {
+    assert.equal(disableMcpServer(enableMcpServer(sample, "cam_probe", NODE, [SCRIPT]).text).text, sample);
+  }
+});
+
+test("MCP server block and proxy blocks are switched independently", () => {
+  const both = enableMcpServer(enableProxy(withFeatures, URL).text, "cam_probe", NODE, [SCRIPT]).text;
+  assert.equal(enableProxy(both, URL).changed, false, "re-enabling the proxy keeps the MCP block");
+  assert.equal(disableProxy(both).text, enableMcpServer(withFeatures, "cam_probe", NODE, [SCRIPT]).text);
+  assert.equal(disableMcpServer(both).text, enableProxy(withFeatures, URL).text);
+  assert.equal(disableMcpServer(disableProxy(both).text).text, withFeatures);
+});
+
+test("MCP server: a user's own table with the same name is never overwritten", () => {
+  const mine = withFeatures + "\n[mcp_servers.cam_probe]\ncommand = \"python\"\n";
+  assert.throws(() => enableMcpServer(mine, "cam_probe", NODE, [SCRIPT]), /already defines mcp_servers\.cam_probe/);
+  assert.equal(enableMcpServer(mine, "other", NODE, [SCRIPT]).changed, true);
 });

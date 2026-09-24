@@ -49,6 +49,9 @@ export const testImages = {
   },
 };
 
+// Tests use gpt-6-sol at low effort to save the user's tokens (AGENTS.md).
+export const TEST_MODEL = "gpt-6-sol";
+
 export const text = (value: string) => ({ type: "text", text: value, text_elements: [] });
 
 export async function runTurn(server: AppServer, threadId: string, input: Json[], timeoutMs = 20 * 60_000): Promise<Json> {

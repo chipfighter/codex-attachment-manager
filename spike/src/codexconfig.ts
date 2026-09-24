@@ -52,14 +52,35 @@ function userRespectSystemProxy(lines: string[]): string | null {
   return null;
 }
 
+// P3: a local MCP server for the panel, as a table appended at the end of config.toml. Its own marker keeps it
+// independent of the proxy blocks: each can be switched on and off alone.
+export const MCP_BEGIN = "# >>> codex-attachment-manager: managed MCP server, remove it with the tool >>>";
+
 // Removes every managed block; the blank line enable adds after the top block goes with it.
 export function disableProxy(text: string): { text: string; changed: boolean } {
+  return removeBlocks(text, BEGIN);
+}
+
+export function disableMcpServer(text: string): { text: string; changed: boolean } {
+  return removeBlocks(text, MCP_BEGIN);
+}
+
+export function enableMcpServer(text: string, name: string, command: string, args: string[]): { text: string; changed: boolean } {
+  const { bom, body, eol } = parts(disableMcpServer(text).text);
+  if (body.split(eol).some((line) => line.trim() === `[mcp_servers.${name}]`)) throw new Error(`config.toml already defines mcp_servers.${name}; not overwriting it`);
+  // JSON string syntax is valid TOML basic-string syntax, including backslashes in Windows paths.
+  const block = [MCP_BEGIN, `[mcp_servers.${name}]`, `command = ${JSON.stringify(command)}`, `args = ${JSON.stringify(args)}`, 'default_tools_approval_mode = "approve"', END];
+  const next = bom + body + (body === "" || body.endsWith(eol) ? "" : eol) + block.join(eol) + eol;
+  return { text: next, changed: next !== text };
+}
+
+function removeBlocks(text: string, begin: string): { text: string; changed: boolean } {
   const { bom, body, eol } = parts(text);
   const lines = body.split(eol);
   const kept: string[] = [];
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() !== BEGIN) { kept.push(lines[i]); continue; }
+    if (lines[i].trim() !== begin) { kept.push(lines[i]); continue; }
     const end = lines.findIndex((line, j) => j > i && line.trim() === END);
     if (end < 0) throw new Error("a managed block in config.toml has no end marker");
     const atTop = kept.length === 0;
@@ -191,10 +212,21 @@ function main(): void {
     if (changed) write(text);
     if (env.changed) writeEnv(env.text!);
     console.log(JSON.stringify({ command, changed, envChanged: env.changed, ...proxyStatus(text), ...envStatus(existsSync(dotenv) ? env.text : null) }));
+  } else if (command === "mcp-enable") {
+    const name = process.argv[process.argv.indexOf("--name") + 1];
+    const script = resolve(process.argv[process.argv.indexOf("--script") + 1]);
+    if (!process.argv.includes("--name") || !process.argv.includes("--script") || !existsSync(script)) throw new Error("usage: codexconfig.ts mcp-enable --name <server> --script <path to .ts>");
+    const { text, changed } = enableMcpServer(current, name, process.execPath, [script]);
+    if (changed) write(text);
+    console.log(JSON.stringify({ command, changed, mcpServer: name }));
+  } else if (command === "mcp-disable") {
+    const { text, changed } = disableMcpServer(current);
+    if (changed) write(text);
+    console.log(JSON.stringify({ command, changed }));
   } else if (command === "status") {
-    console.log(JSON.stringify({ command, configExists: existsSync(config), ...proxyStatus(current), ...envStatus(currentEnv) }));
+    console.log(JSON.stringify({ command, configExists: existsSync(config), ...proxyStatus(current), mcpServerManaged: current.split(/\r?\n/).some((line) => line.trim() === MCP_BEGIN), ...envStatus(currentEnv) }));
   } else {
-    throw new Error("usage: codexconfig.ts enable [--port N] | disable | status");
+    throw new Error("usage: codexconfig.ts enable [--port N] | disable | mcp-enable --name <server> --script <path> | mcp-disable | status");
   }
 }
 

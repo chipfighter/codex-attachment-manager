@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>素材面板试验</title>
+<style>
+  :root { color-scheme: light dark; font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+  body { margin: 0; padding: 12px 14px; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
+  .label { min-width: 9em; opacity: .75; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; }
+  pre { font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; background: rgba(127,127,127,.12); padding: 8px; border-radius: 6px; }
+  button { font: inherit; padding: 3px 10px; }
+  img { width: 40px; height: 40px; border-radius: 6px; border: 1px solid rgba(127,127,127,.4); }
+</style>
+</head>
+<body>
+<h1>素材管理器 · 界面试验</h1>
+<div class="row"><span class="label">静态页面</span><b class="ok">已加载</b></div>
+<div class="row"><span class="label">缩略图（data URL）</span><img id="thumb" alt=""><b id="thumbState">加载中…</b></div>
+<div class="row"><span class="label">与 Codex 握手</span><b id="handshake">进行中…</b></div>
+<div class="row"><span class="label">回调插件服务</span><b id="ping">未开始</b></div>
+<div class="row"><span class="label">访问本机地址</span><b id="fetch">未开始</b></div>
+<div class="row"><button id="again">再回调一次</button><button id="fullscreen">请求全屏</button></div>
+<pre id="log"></pre>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const lines = [];
+  const log = (line) => { lines.push(line); $("log").textContent = lines.join("\n"); resize(); };
+  const set = (id, text, ok) => { $(id).textContent = text; $(id).className = ok ? "ok" : "bad"; resize(); };
+  const report = { windowOpenai: typeof window.openai === "object" && window.openai ? Object.keys(window.openai) : null, received: [], csp: [] };
+  let nextId = 1;
+  const pending = new Map();
+  const post = (message) => window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  const request = (method, params, timeoutMs = 10000) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(method + " 超时")); }, timeoutMs);
+    pending.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+    post({ id, method, params });
+  });
+  function resize() {
+    post({ method: "ui/notifications/size-changed", params: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight } });
+  }
+  document.addEventListener("securitypolicyviolation", (event) => {
+    report.csp.push(event.violatedDirective + " " + event.blockedURI);
+    log("CSP 拦截：" + event.violatedDirective + " " + event.blockedURI);
+  });
+  window.addEventListener("message", (event) => {
+    const message = event.data;
+    if (!message || typeof message !== "object") return;
+    if (message.id !== undefined && pending.has(message.id) && ("result" in message || "error" in message)) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(JSON.stringify(message.error))); else waiter.resolve(message.result);
+      return;
+    }
+    report.received.push(message.method || "reply");
+    log("收到：" + (message.method || "reply") + " " + JSON.stringify(message.params ?? message.result ?? {}).slice(0, 160));
+  });
+  log("window.openai：" + JSON.stringify(report.windowOpenai));
+
+  // A data-URL image drawn on a canvas stands in for a thumbnail.
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 40;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fad23c"; ctx.fillRect(0, 0, 40, 40);
+  ctx.fillStyle = "#2846d2"; ctx.beginPath(); ctx.arc(20, 20, 11, 0, Math.PI * 2); ctx.fill();
+  $("thumb").onload = () => { set("thumbState", "显示正常", true); report.thumb = "ok"; };
+  $("thumb").onerror = () => { set("thumbState", "显示失败", false); report.thumb = "error"; };
+  $("thumb").src = canvas.toDataURL("image/png");
+
+  const ping = async (reason) => {
+    try {
+      const result = await request("tools/call", { name: "cam_probe_ping", arguments: { reason, report } });
+      set("ping", "成功：" + JSON.stringify(result.structuredContent ?? result.content).slice(0, 100), true);
+    } catch (error) { set("ping", "失败：" + error.message, false); }
+  };
+  $("again").onclick = () => ping("button");
+  $("fullscreen").onclick = async () => {
+    try { log("全屏：" + JSON.stringify(await request("ui/request-display-mode", { mode: "fullscreen" }))); }
+    catch (error) { log("全屏失败：" + error.message); }
+  };
+
+  (async () => {
+    try {
+      const init = await request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "codex-attachment-manager-probe", version: "0.0.1" }, appCapabilities: {} });
+      const context = init.hostContext || {};
+      report.host = { protocolVersion: init.protocolVersion, hostInfo: init.hostInfo, hostCapabilities: init.hostCapabilities, contextKeys: Object.keys(context), displayMode: context.displayMode, availableDisplayModes: context.availableDisplayModes, theme: context.theme, locale: context.locale };
+      post({ method: "ui/notifications/initialized", params: {} });
+      set("handshake", "成功 " + JSON.stringify(report.host.hostInfo ?? {}).slice(0, 80), true);
+      log("握手结果：" + JSON.stringify(report.host).slice(0, 600));
+    } catch (error) {
+      report.handshakeError = error.message;
+      set("handshake", "失败：" + error.message, false);
+    }
+    try {
+      const response = await fetch("http://localhost:17891/__cam/health");
+      report.fetch = "status " + response.status;
+      set("fetch", "成功（" + response.status + "）", true);
+    } catch (error) {
+      report.fetch = String(error);
+      set("fetch", "失败：" + error.message, false);
+    }
+    await ping("load");
+  })();
+  resize();
+})();
+</script>
+</body>
+</html>
