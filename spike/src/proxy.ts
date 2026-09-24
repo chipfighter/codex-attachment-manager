@@ -21,7 +21,7 @@ import { DEFAULT_PORT, ENGINE_SERVICE, engineHealth, watchForCodex } from "./eng
 import type { ImageRef } from "./images.ts";
 import { dataDir, proxyLogDirOf, requestStatsDirOf } from "./paths.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
-import { readSelection, selectionDir } from "./selection.ts";
+import { effectiveSelection, selectionDir } from "./selection.ts";
 import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
 
 type Json = Record<string, any>;
@@ -168,9 +168,9 @@ export function hasUnsafeInteger(json: string): boolean {
   return false;
 }
 
-export function hasUnchecked(threadId: string | null, dir = selectionDir): boolean {
+export function hasUnchecked(threadId: string | null, dir = selectionDir, sessionsDir = join(codexHome(), "sessions")): boolean {
   if (!threadId) return false;
-  try { return Object.keys(readSelection(threadId, dir).unchecked).length > 0; } catch { return false; }
+  try { return Object.keys(effectiveSelection(threadId, sessionsDir, dir).unchecked).length > 0; } catch { return false; }
 }
 
 // P2: replace the thread's unchecked images with placeholders. Whenever the body cannot be handled safely it is
@@ -185,7 +185,7 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
   if (hasUnsafeInteger(text)) return { body: original, report: { skipped: "integer beyond 2^53 would change when re-serialized" } };
   let index: ThreadIndex;
   try { index = loadThreadIndex(sessionsDir, threadId); } catch (error) { return { body: original, report: { skipped: `thread index: ${String(error)}` } }; }
-  const selection = readSelection(threadId, dir);
+  const selection = effectiveSelection(threadId, sessionsDir, dir);
   const describe = (ref: ImageRef): Described | undefined => {
     const known = index.byKey.get(ref.key);
     if (known) return known;
