@@ -1,0 +1,5 @@
+node_modules/
+dist/
+
+# 真实会话数据、提取的图片、日志和备份只留在本机
+local/
