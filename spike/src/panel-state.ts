@@ -1,5 +1,6 @@
 // Purpose: P3-3 — what the panel shows for one thread: every image occurrence with its state, the ids the model asked
 // for in its latest reply, and the engine's statistics of the latest request. Also applies check/uncheck actions.
+// P4 — serves each image for the panel's thumbnails and previews.
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
@@ -78,9 +79,19 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
   };
 }
 
+// A thread with no rollout yet (new, or the panel opened outside a thread) simply has no images.
+function historyOf(threadId: string, sessionsDir: string): Record_[] {
+  try {
+    return readThreadHistory(sessionsDir, threadId);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("no rollout found")) return [];
+    throw error;
+  }
+}
+
 function load(threadId: string, options: PanelOptions) {
   const root = options.dataRoot ?? dataDir();
-  const history = readThreadHistory(options.sessionsDir, threadId);
+  const history = historyOf(threadId, options.sessionsDir);
   const index = buildIndex(threadId, history);
   const selection = effectiveSelection(threadId, options.sessionsDir, selectionDirOf(root));
   const statsFile = join(requestStatsDirOf(root), `${threadId}.json`);
@@ -112,12 +123,18 @@ export function applySelection(threadId: string, change: { uncheck?: string[]; c
   return panelState(threadId, history, index, new Set(Object.keys(unchecked)), lastRequest);
 }
 
-export function thumbnailFor(threadId: string, id: string, maxSide: number, options: PanelOptions): { id: string; dataUrl: string | null } {
-  const history = readThreadHistory(options.sessionsDir, threadId);
+// One image for the panel: a PNG larger than maxSide is scaled down; smaller PNGs and other formats (which the
+// browser scales itself) are passed through as they are.
+export function imageFor(threadId: string, id: string, maxSide: number, options: PanelOptions): { id: string; dataUrl: string | null } {
+  const history = historyOf(threadId, options.sessionsDir);
   const index = buildIndex(threadId, history);
   const image = index.images.find((candidate) => candidate.id === id);
   if (!image) throw new Error(`${id} is not an image of this thread`);
   const items = history.filter((record) => record.type === "response_item").map((record) => record.payload);
   const data = imageData(items, image);
-  return { id, dataUrl: data && image.mime === "image/png" ? pngThumbnail(data, maxSide) : null };
+  if (!data || !image.mime?.startsWith("image/")) return { id, dataUrl: null };
+  const original = `data:${image.mime};base64,${data}`;
+  const large = image.mime === "image/png" && Math.max(image.width ?? 0, image.height ?? 0) > maxSide;
+  // A PNG our decoder cannot read (e.g. interlaced) is still shown, just not scaled down first.
+  return { id, dataUrl: large ? pngThumbnail(data, maxSide) ?? original : original };
 }

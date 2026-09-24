@@ -1,5 +1,5 @@
-// Purpose: P3-3 — small PNG thumbnails for the panel, made from the inline images in the rollout. PNG only for now;
-// other formats return null and the panel shows an icon instead.
+// Purpose: P3-3 — scaled-down PNGs for the panel, made from the inline images in the rollout. Only PNG is decoded;
+// other formats go to the panel as they are and the browser scales them.
 // Input: base64 image data and a maximum side length. Output: a PNG data URL, cached per content and size.
 
 import { createHash } from "node:crypto";

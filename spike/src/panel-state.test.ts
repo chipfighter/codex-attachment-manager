@@ -1,11 +1,12 @@
 // Purpose: P3-3 — the panel's data: image states, the ids the model asked for, check/uncheck, and thumbnails.
+// P4 — previews and other formats, and threads without a rollout yet.
 // Input: synthetic rollouts in temporary folders; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decodePng } from "./png.ts";
-import { applySelection, loadPanelState, requestedIds, thumbnailFor } from "./panel-state.ts";
-import { assistant, sampleSessions, THREAD, turn } from "./testfixtures.ts";
+import { applySelection, imageFor, loadPanelState, requestedIds } from "./panel-state.ts";
+import { assistant, line, red, sampleSessions, THREAD, turn } from "./testfixtures.ts";
 import { shrink } from "./thumbnail.ts";
 
 const records = (text: string) => text.trim().split("\n").map((raw) => JSON.parse(raw));
@@ -44,10 +45,28 @@ test("check and uncheck are kept per thread and validated", () => {
 
 test("thumbnails keep the aspect ratio and fit the requested size", () => {
   const options = sampleSessions();
-  const thumb = thumbnailFor(THREAD, "IMG-001", 32, options);
+  const thumb = imageFor(THREAD, "IMG-001", 32, options);
   assert.ok(thumb.dataUrl?.startsWith("data:image/png;base64,"));
   const decoded = decodePng(Buffer.from(thumb.dataUrl!.split(",")[1], "base64"));
   assert.deepEqual([decoded.width, decoded.height], [32, 16]);
   const averaged = shrink(2, 1, Buffer.from([0, 0, 0, 255, 200, 100, 50, 255]), 1);
   assert.deepEqual([...averaged.pixels], [100, 50, 25, 255], "a box filter averages the covered pixels");
+});
+
+test("images within the requested size, and formats other than PNG, reach the panel as they are", () => {
+  const jpeg = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex").toString("base64");
+  const options = sampleSessions(turn("t3") + line("response_item", {
+    type: "message", id: "msg_3", role: "user",
+    content: [{ type: "input_image", image_url: `data:image/jpeg;base64,${jpeg}` }],
+    internal_chat_message_metadata_passthrough: { turn_id: "t3" },
+  }));
+  assert.equal(imageFor(THREAD, "IMG-001", 160, options).dataUrl, `data:image/png;base64,${red.toString("base64")}`);
+  assert.equal(imageFor(THREAD, "IMG-004", 160, options).dataUrl, `data:image/jpeg;base64,${jpeg}`);
+  assert.throws(() => imageFor(THREAD, "IMG-099", 160, options), /not an image of this thread/);
+});
+
+test("a thread without a rollout yet shows an empty panel instead of an error", () => {
+  const options = sampleSessions();
+  const state = loadPanelState("01a0d301-0000-7000-8000-00000000ffff", options);
+  assert.deepEqual([state.images, state.turns, state.totals.images], [[], 0, 0]);
 });

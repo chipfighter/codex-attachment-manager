@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上下文素材</title>
+<!--
+  Purpose: P4 — the context-material panel inside Codex Desktop's side panel (an MCP App). It lists the thread's
+  images in history order; the user previews them, checks or unchecks them, and confirms. Nothing is sent to the model.
+  Input: the MCP Apps bridge (postMessage) — Codex's call of cam_panel, and our own calls of cam_panel, cam_image and
+  cam_set_selection. Output: selection changes through cam_set_selection. Self-contained: no network, no storage.
+-->
+<style>
+  /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
+  :root {
+    color-scheme: light;
+    --fb-bg: rgb(255 255 255); --fb-text: rgb(26 28 31);
+    --fb-info: rgb(51 156 255); --fb-warn: rgb(226 85 7); --fb-ok: rgb(0 162 64); --fb-danger: rgb(224 46 42);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --fb-bg: rgb(24 24 24); --fb-text: rgb(255 255 255);
+    --fb-info: rgb(131 195 255); --fb-warn: rgb(255 133 73); --fb-ok: rgb(64 201 119); --fb-danger: rgb(255 103 100);
+  }
+  :root {
+    --bg: var(--color-background-primary, var(--fb-bg));
+    --text: var(--color-text-primary, var(--fb-text));
+    --text-2: color-mix(in srgb, var(--text) 72%, transparent);
+    --text-3: var(--color-text-secondary, color-mix(in srgb, var(--text) 50%, transparent));
+    --bg-soft: color-mix(in srgb, var(--text) 5%, var(--bg));
+    --bg-hover: color-mix(in srgb, var(--text) 4%, var(--bg));
+    --border: var(--color-border-secondary, color-mix(in srgb, var(--text) 8%, transparent));
+    --border-strong: color-mix(in srgb, var(--text) 24%, transparent);
+    --accent: var(--text); --accent-text: var(--bg);
+    --info: var(--color-text-info, var(--fb-info));
+    --info-bg: color-mix(in srgb, var(--info) 9%, var(--bg));
+    --warn: var(--color-text-warning, var(--fb-warn));
+    --warn-bg: color-mix(in srgb, var(--warn) 11%, var(--bg));
+    --ok: var(--color-text-success, var(--fb-ok));
+    --danger: var(--color-text-danger, var(--fb-danger));
+    --danger-bg: color-mix(in srgb, var(--danger) 9%, var(--bg));
+    --font: var(--font-sans, -apple-system, system-ui, "Segoe UI", "Microsoft YaHei UI", sans-serif);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg); color: var(--text); font: 13px/1.5 var(--font);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+
+  header { flex: none; padding: 16px 18px 14px; }
+  .title { display: flex; align-items: center; gap: 8px; }
+  .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+  .count { padding: 0 7px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 20px; font-variant-numeric: tabular-nums; }
+  .count:empty { display: none; }
+  .summary { margin-top: 4px; color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .summary b { font-weight: 600; color: var(--text); }
+
+  main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 18px; border-top: 1px solid var(--border); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  .turn { display: flex; align-items: center; gap: 10px; margin: 18px 8px 6px; color: var(--text-3); font-size: 12px; font-weight: 500; }
+  .turn::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .turn:first-child { margin-top: 14px; }
+
+  .row { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; transition: background .15s; }
+  .row:hover { background: var(--bg-hover); }
+  .row.pending { background: var(--info-bg); }
+  .thumb {
+    position: relative; flex: none; width: 64px; height: 64px; padding: 0; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--bg-soft); overflow: hidden; cursor: zoom-in;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .thumb:hover { border-color: var(--border-strong); box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 10%, transparent); }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; transition: opacity .15s, filter .15s; }
+  .thumb .none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 11px; }
+  .thumb.loading::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 20%, var(--bg-hover) 50%, transparent 80%) var(--bg-soft);
+    background-size: 200% 100%; animation: shimmer 1.2s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+  .row.off .thumb img { opacity: .4; filter: grayscale(1); }
+
+  .check { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; cursor: pointer; }
+  .check.locked { cursor: default; }
+  .info { display: block; flex: 1; min-width: 0; }
+  .line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 14px; line-height: 20px; }
+  .id { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row.pending .id::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 2px 0; border-radius: 50%; background: var(--info); vertical-align: middle; }
+  .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+  .meta { display: block; margin-top: 2px; color: var(--text-3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .row.off .id, .row.off .name { color: var(--text-3); }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .tags:empty { display: none; }
+  .tag { padding: 0 8px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 11.5px; font-weight: 500; line-height: 20px; white-space: nowrap; }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+
+  .check input { position: absolute; opacity: 0; pointer-events: none; }
+  .box {
+    flex: none; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--border-strong);
+    display: grid; place-items: center; transition: background .15s, border-color .15s;
+  }
+  .check:hover .box { border-color: var(--text-3); }
+  .box::after { content: ""; width: 8px; height: 4.5px; margin-top: -2px; border: 2px solid var(--accent-text); border-top: 0; border-right: 0; transform: rotate(-45deg); opacity: 0; transition: opacity .12s; }
+  .check input:checked + .box { background: var(--accent); border-color: var(--accent); }
+  .check input:checked + .box::after { opacity: 1; }
+  .check input:disabled + .box { opacity: .35; }
+  .check input:focus-visible + .box { outline: 2px solid var(--info); outline-offset: 2px; }
+
+  .notice { margin: 12px 8px 0; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; display: flex; gap: 10px; align-items: flex-start; }
+  .notice.warn { background: var(--warn-bg); color: var(--warn); }
+  .notice.error { background: var(--danger-bg); color: var(--danger); }
+  .notice .grow { flex: 1; }
+  .notice button { border: 0; background: none; padding: 0; font-weight: 600; cursor: pointer; color: inherit; font-size: 12.5px; }
+
+  .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-3); }
+  .empty svg { width: 36px; height: 36px; margin-bottom: 6px; }
+  .empty strong { color: var(--text-2); font-weight: 500; font-size: 14px; }
+  .empty span { font-size: 12.5px; max-width: 260px; }
+
+  footer { flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 14px 12px 18px; border-top: 1px solid var(--border); background: var(--bg); }
+  .status { flex: 1; min-width: 0; color: var(--text-3); font-size: 12.5px; }
+  .status.pending { color: var(--text-2); }
+  .status.pending::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%; background: var(--info); vertical-align: middle; }
+  .status.ok { color: var(--ok); }
+  .btn {
+    height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+    font-size: 13px; font-weight: 500; white-space: nowrap; transition: background .15s, color .15s, transform .1s;
+  }
+  .btn:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
+  .btn:active:not(:disabled) { transform: scale(.97); }
+  .btn.primary { padding: 0 18px; background: var(--accent); color: var(--accent-text); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
+  .btn:disabled, .btn.primary:disabled { background: var(--bg-soft); color: var(--text-3); cursor: default; }
+  [hidden] { display: none !important; }
+
+  .viewer { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; background: rgb(19 19 19); color: rgb(245 245 245); }
+  .viewer-top, .viewer-bottom { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; }
+  .viewer-title { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
+  .viewer-title .name { color: rgb(255 255 255 / 62%); }
+  .viewer-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 0 14px; }
+  .viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+  .viewer-stage .none { color: rgb(255 255 255 / 55%); font-size: 12.5px; }
+  .viewer-stage.loading img { filter: blur(6px); opacity: .7; }
+  .viewer-bottom .meta { flex: 1; color: rgb(255 255 255 / 55%); margin: 0; }
+  .icon-btn { width: 32px; height: 32px; border: 0; border-radius: 999px; background: transparent; color: rgb(255 255 255 / 80%); cursor: pointer; display: grid; place-items: center; transition: background .15s; }
+  .icon-btn:hover { background: rgb(255 255 255 / 12%); }
+  .viewer .check { flex: none; gap: 8px; color: rgb(245 245 245); font-size: 13px; font-weight: 500; }
+  .viewer .box { border-color: rgb(255 255 255 / 45%); }
+  .viewer .check:hover .box { border-color: rgb(255 255 255 / 75%); }
+  .viewer .check input:checked + .box { background: rgb(245 245 245); border-color: rgb(245 245 245); }
+  .viewer .box::after { border-color: rgb(19 19 19); }
+</style>
+</head>
+<body>
+<header>
+  <div class="title"><h1>图片</h1><span class="count" id="count"></span></div>
+  <div class="summary" id="summary">正在读取…</div>
+</header>
+<main id="main"></main>
+<footer>
+  <div class="status" id="status"></div>
+  <button class="btn" id="undo" hidden>撤销</button>
+  <button class="btn primary" id="confirm" disabled>确定</button>
+</footer>
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="图片预览">
+  <div class="viewer-top">
+    <div class="viewer-title"><span class="id" id="viewerId"></span><span class="name" id="viewerName"></span></div>
+    <button class="icon-btn" id="viewerClose" aria-label="关闭预览" title="关闭（Esc）">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 2l10 10M12 2 2 12"/></svg>
+    </button>
+  </div>
+  <div class="viewer-stage" id="viewerStage"></div>
+  <div class="viewer-bottom">
+    <span class="meta" id="viewerMeta"></span>
+    <label class="check" id="viewerCheck"><input type="checkbox"><span class="box"></span><span>发送这张图</span></label>
+  </div>
+</div>
+<script>
+(() => {
+  const KIND = { upload: "用户上传", view: "查看的图片", generated: "生成的图片", tool: "工具返回" };
+  const THUMB_SIDE = 160;
+  const POLL_MS = 3000;
+  const $ = (id) => document.getElementById(id);
+  const main = $("main");
+
+  // ---- MCP Apps bridge (JSON-RPC over postMessage with Codex) ----
+  let nextId = 1;
+  const waiting = new Map();
+  const post = (message) => window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  function request(method, params, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+      const id = nextId++;
+      const timer = setTimeout(() => { waiting.delete(id); reject(new Error("Codex 没有响应")); }, timeoutMs);
+      waiting.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
+      post({ id, method, params });
+    });
+  }
+  const textOf = (result) => (result?.content ?? []).map((part) => part?.text).filter(Boolean).join("\n");
+  async function callTool(name, args) {
+    const result = await request("tools/call", { name, arguments: args ?? {} });
+    if (result?.isError) throw new Error(textOf(result) || "调用失败");
+    return result;
+  }
+  window.addEventListener("message", (event) => {
+    const message = event.data;
+    if (!message || typeof message !== "object") return;
+    if (message.id !== undefined && waiting.has(message.id) && ("result" in message || "error" in message)) {
+      const waiter = waiting.get(message.id);
+      waiting.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error.message ?? "调用失败")); else waiter.resolve(message.result);
+      return;
+    }
+    if (message.method === "ui/notifications/tool-result") ingest(message.params?.structuredContent);
+    else if (message.method === "ui/notifications/host-context-changed") applyHost(message.params);
+    else if (message.id !== undefined && message.method) post({ id: message.id, result: {} });
+  });
+  function applyHost(context) {
+    if (!context) return;
+    if (context.theme === "dark" || context.theme === "light") document.documentElement.dataset.theme = context.theme;
+    const variables = context.styles?.variables;
+    if (variables && typeof variables === "object") {
+      for (const [name, value] of Object.entries(variables)) if (name.startsWith("--") && typeof value === "string") document.documentElement.style.setProperty(name, value);
+    }
+  }
+
+  // ---- state ----
+  const S = {
+    data: null, threadId: null, error: null, flash: null,
+    pending: new Map(),            // id -> checked, changes not confirmed yet
+    thumbs: new Map(),             // id -> data URL or null
+    viewer: null,                  // { id, url, loading, failed }
+    refreshing: false, saving: false,
+  };
+  const images = () => S.data?.images ?? [];
+  const byId = (id) => images().find((image) => image.id === id);
+  const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : image.checked);
+
+  function ingest(state) {
+    if (!state || !Array.isArray(state.images)) return;
+    // Polling mostly returns the same state; leave the page alone then.
+    const signature = JSON.stringify(state);
+    if (signature === S.signature && !S.error) return;
+    S.signature = signature;
+    if (S.threadId && state.threadId !== S.threadId) {
+      S.pending.clear(); S.thumbs.clear(); thumbQueue.length = 0; thumbsInFlight.clear(); closeViewer();
+    }
+    S.threadId = state.threadId;
+    S.data = state;
+    S.error = null;
+    for (const [id, checked] of S.pending) {
+      const image = byId(id);
+      if (!image || !image.replaceable || image.checked === checked) S.pending.delete(id);
+    }
+    render();
+  }
+
+  let lastRefresh = 0;
+  async function refresh() {
+    if (S.refreshing || S.saving) return;
+    S.refreshing = true;
+    lastRefresh = Date.now();
+    try { ingest((await callTool("cam_panel")).structuredContent); }
+    catch (error) { S.error = "读取失败：" + error.message; render(); }
+    finally { S.refreshing = false; }
+  }
+
+  function setChecked(id, checked) {
+    const image = byId(id);
+    if (!image || !image.replaceable || S.saving) return;
+    if (image.checked === checked) S.pending.delete(id); else S.pending.set(id, checked);
+    S.flash = null;
+    render();
+  }
+
+  async function confirm() {
+    if (!S.pending.size || S.saving) return;
+    const changes = [...S.pending];
+    S.saving = true; render();
+    try {
+      const result = await callTool("cam_set_selection", {
+        uncheck: changes.filter(([, checked]) => !checked).map(([id]) => id),
+        check: changes.filter(([, checked]) => checked).map(([id]) => id),
+      });
+      S.pending.clear();
+      S.flash = "已保存，从下一条消息开始生效";
+      setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
+      ingest(result.structuredContent);
+    } catch (error) {
+      S.error = "保存失败：" + error.message;
+    } finally {
+      S.saving = false; render();
+    }
+  }
+
+  // ---- images: every thumbnail is queued in list order, a few at a time; rows scrolled into view go first ----
+  // (Visibility alone is not enough: a page that is hidden or not painted yet gets no intersection updates.)
+  const thumbQueue = [];
+  const thumbsInFlight = new Set();
+  async function loadImage(id, maxSide) {
+    const result = await callTool("cam_image", { id, maxSide });
+    return result?._meta?.dataUrl ?? null;
+  }
+  function queueThumb(id, first = false) {
+    if (S.thumbs.has(id) || thumbsInFlight.has(id)) return;
+    const at = thumbQueue.indexOf(id);
+    if (at >= 0) { if (!first) return; thumbQueue.splice(at, 1); }
+    if (first) thumbQueue.unshift(id); else thumbQueue.push(id);
+    pumpThumbs();
+  }
+  function pumpThumbs() {
+    while (thumbsInFlight.size < 3 && thumbQueue.length) {
+      const id = thumbQueue.shift();
+      const thread = S.threadId;
+      thumbsInFlight.add(id);
+      loadImage(id, THUMB_SIDE)
+        .then((url) => { if (thread === S.threadId) S.thumbs.set(id, url); })
+        .catch(() => { if (thread === S.threadId) S.thumbs.set(id, null); })
+        .finally(() => { thumbsInFlight.delete(id); const row = rows.get(id); if (row) paintThumb(row, id); pumpThumbs(); });
+    }
+  }
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) if (entry.isIntersecting) { observer.unobserve(entry.target); queueThumb(entry.target.dataset.id, true); }
+  }, { root: main, rootMargin: "200px 0px" });
+
+  // ---- rendering ----
+  const rows = new Map();
+  const turnLabels = new Map();
+  const emptyState = document.createElement("div");
+  emptyState.className = "empty";
+  emptyState.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="2.5"/><path d="M7 3h10.5A3.5 3.5 0 0 1 21 6.5V16"/><circle cx="8" cy="11" r="1.5"/><path d="m3.5 18 4.5-4.5 3 3 2-2 3.5 3.5"/></svg><strong>这个任务里还没有图片</strong><span>上传、查看或生成的图片会按时间顺序出现在这里。</span>';
+  const formatBytes = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  const describe = (image) => [KIND[image.kind] ?? image.kind, image.width && image.height ? `${image.width}×${image.height}` : null, formatBytes(image.bytes)].filter(Boolean).join(" · ");
+
+  function tagsOf(image) {
+    const tags = [];
+    const checked = isChecked(image);
+    const sentCopy = image.sameAs.find((id) => { const other = byId(id); return other && isChecked(other); });
+    if (!image.replaceable) tags.push(["无法取消", ""]);
+    if (!checked && image.requested) tags.push(["模型需要这张", "warn"]);
+    if (!checked) tags.push([sentCopy ? `由 ${sentCopy} 代替` : "不发送", ""]);
+    else if (image.sameAs.length) tags.push([`与 ${image.sameAs[0]} 相同`, ""]);
+    return tags;
+  }
+
+  function makeRow(id) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.dataset.id = id;
+    row.innerHTML = '<button class="thumb" type="button"></button><label class="check"><span class="info"><span class="line1"><span class="id"></span><span class="name"></span></span><span class="meta"></span><span class="tags"></span></span><input type="checkbox"><span class="box"></span></label>';
+    row.querySelector(".thumb").addEventListener("click", () => openViewer(id));
+    row.querySelector("input").addEventListener("change", (event) => setChecked(id, event.target.checked));
+    observer.observe(row);
+    return row;
+  }
+
+  function paintThumb(row, id) {
+    const button = row.querySelector(".thumb");
+    const url = S.thumbs.get(id);
+    button.classList.toggle("loading", !S.thumbs.has(id));
+    let img = button.querySelector("img");
+    if (url) {
+      if (!img) { img = document.createElement("img"); img.alt = ""; button.replaceChildren(img); }
+      if (img.src !== url) img.src = url;
+    } else if (S.thumbs.has(id)) {
+      button.innerHTML = '<span class="none">无预览</span>';
+    }
+  }
+
+  function paintRow(row, image) {
+    const checked = isChecked(image);
+    row.classList.toggle("off", !checked);
+    row.classList.toggle("pending", S.pending.has(image.id));
+    row.querySelector(".thumb").setAttribute("aria-label", `预览 ${image.id}`);
+    row.querySelector(".id").textContent = image.id;
+    row.querySelector(".name").textContent = image.name ?? "未命名";
+    row.querySelector(".meta").textContent = describe(image);
+    const input = row.querySelector("input");
+    input.checked = checked;
+    input.disabled = !image.replaceable || S.saving;
+    input.setAttribute("aria-label", `发送 ${image.id}`);
+    row.querySelector(".check").classList.toggle("locked", !image.replaceable);
+    const tags = row.querySelector(".tags");
+    tags.replaceChildren(...tagsOf(image).map(([text, tone]) => {
+      const tag = document.createElement("span");
+      tag.className = `tag ${tone}`.trim();
+      tag.textContent = text;
+      return tag;
+    }));
+    paintThumb(row, image.id);
+  }
+
+  function renderHeader() {
+    const list = images();
+    if (!S.data) { $("count").textContent = ""; $("summary").textContent = S.error ? "读取失败" : "正在读取…"; return; }
+    const sent = list.filter(isChecked);
+    $("count").textContent = list.length ? String(list.length) : "";
+    const summary = $("summary");
+    if (!list.length) { summary.textContent = "还没有图片"; return; }
+    summary.replaceChildren(
+      "发送 ", Object.assign(document.createElement("b"), { textContent: String(sent.length) }), " 张",
+      list.length > sent.length ? ` · 不发送 ${list.length - sent.length} 张` : "",
+      sent.length ? ` · 约 ${formatBytes(sent.reduce((sum, image) => sum + image.bytes, 0))}` : "",
+    );
+  }
+
+  function notice(tone, text, action) {
+    const box = document.createElement("div");
+    box.className = `notice ${tone}`;
+    const span = document.createElement("span");
+    span.className = "grow";
+    span.textContent = text;
+    box.append(span);
+    if (action) {
+      const button = document.createElement("button");
+      button.textContent = action.label;
+      button.addEventListener("click", action.run);
+      box.append(button);
+    }
+    return box;
+  }
+
+  function renderList() {
+    const nodes = [];
+    if (S.error) nodes.push(notice("error", S.error, { label: "重试", run: () => { S.error = null; render(); refresh(); } }));
+    if (S.data?.engineRunning === false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
+    const list = images();
+    if (S.data && !list.length) nodes.push(emptyState);
+    let turn;
+    for (const image of list) {
+      if (image.turn !== turn) {
+        turn = image.turn;
+        if (!turnLabels.has(turn)) {
+          const label = document.createElement("div");
+          label.className = "turn";
+          label.textContent = turn === null ? "更早" : `第 ${turn} 轮`;
+          turnLabels.set(turn, label);
+        }
+        nodes.push(turnLabels.get(turn));
+      }
+      let row = rows.get(image.id);
+      if (!row) { row = makeRow(image.id); rows.set(image.id, row); }
+      paintRow(row, image);
+      nodes.push(row);
+    }
+    for (const [id, row] of rows) if (!byId(id)) { observer.unobserve(row); rows.delete(id); }
+    // Only touch the list when its items changed, so scrolling and keyboard focus are kept.
+    const current = main.children;
+    if (nodes.length !== current.length || nodes.some((node, index) => node !== current[index])) main.replaceChildren(...nodes);
+    for (const image of list) queueThumb(image.id);
+  }
+
+  function renderFooter() {
+    const status = $("status");
+    const count = S.pending.size;
+    status.className = "status";
+    if (S.saving) status.textContent = "正在保存…";
+    else if (count) { status.textContent = `有 ${count} 处改动，点“确定”后生效`; status.classList.add("pending"); }
+    else if (S.flash) { status.textContent = S.flash; status.classList.add("ok"); }
+    else status.textContent = images().length ? "勾选的图片会随下一条消息发给模型" : "";
+    $("undo").hidden = !count;
+    $("undo").disabled = S.saving;
+    $("confirm").disabled = !count || S.saving;
+  }
+
+  function renderViewer() {
+    const viewer = $("viewer");
+    const image = S.viewer && byId(S.viewer.id);
+    if (!image) { viewer.hidden = true; return; }
+    viewer.hidden = false;
+    $("viewerId").textContent = image.id;
+    $("viewerName").textContent = image.name ?? "未命名";
+    $("viewerMeta").textContent = [image.turn === null ? null : `第 ${image.turn} 轮`, describe(image)].filter(Boolean).join(" · ");
+    const input = $("viewerCheck").querySelector("input");
+    input.checked = isChecked(image);
+    input.disabled = !image.replaceable || S.saving;
+    const stage = $("viewerStage");
+    const url = S.viewer.url ?? S.thumbs.get(image.id) ?? null;
+    stage.classList.toggle("loading", S.viewer.loading && !!url);
+    if (url) {
+      let img = stage.querySelector("img");
+      if (!img) { img = document.createElement("img"); img.alt = image.name ?? image.id; stage.replaceChildren(img); }
+      if (img.src !== url) img.src = url;
+    } else {
+      stage.innerHTML = `<span class="none">${S.viewer.loading ? "正在加载…" : "这张图无法预览"}</span>`;
+    }
+  }
+
+  function render() { renderHeader(); renderList(); renderFooter(); renderViewer(); }
+
+  let focusBeforeViewer = null;
+  function openViewer(id) {
+    focusBeforeViewer = document.activeElement;
+    S.viewer = { id, url: null, loading: true };
+    renderViewer();
+    $("viewerClose").focus({ focusVisible: false });
+    const side = Math.min(2048, Math.max(800, Math.round(Math.max(window.innerWidth, window.innerHeight) * (window.devicePixelRatio || 1))));
+    loadImage(id, side)
+      .then((url) => { if (S.viewer?.id === id) S.viewer = { id, url, loading: false }; })
+      .catch(() => { if (S.viewer?.id === id) S.viewer = { id, url: null, loading: false }; })
+      .finally(renderViewer);
+  }
+  function closeViewer() {
+    if (!S.viewer) return;
+    S.viewer = null;
+    renderViewer();
+    focusBeforeViewer?.focus?.();
+  }
+
+  $("viewerClose").addEventListener("click", closeViewer);
+  $("viewerStage").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeViewer(); });
+  $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
+  $("undo").addEventListener("click", () => { S.pending.clear(); render(); });
+  $("confirm").addEventListener("click", confirm);
+
+  // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----
+  if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+  render();
+  request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "codex-attachment-manager", version: "0.1.0" }, appCapabilities: {} })
+    .then((init) => { applyHost(init?.hostContext); post({ method: "ui/notifications/initialized", params: {} }); })
+    .catch(() => {})
+    .finally(() => setTimeout(() => { if (!S.data) refresh(); }, 1200));
+  // Slower, not stopped, while the page reports itself hidden: a host frame may report that wrongly.
+  setInterval(() => { if (!document.hidden || Date.now() - lastRefresh > 5 * POLL_MS) refresh(); }, POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>
