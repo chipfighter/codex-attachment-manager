@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decodePng } from "./png.ts";
-import { applySelection, imageFor, loadPanelState, requestedIds } from "./panel-state.ts";
+import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "./panel-state.ts";
+import { requestStatsDirOf } from "./paths.ts";
+import { recordRequest } from "./request-stats.ts";
 import { assistant, line, red, sampleSessions, THREAD, turn } from "./testfixtures.ts";
 import { shrink } from "./thumbnail.ts";
 
@@ -27,7 +29,37 @@ test("panel state lists every image with checked, same-content and requested fla
   ]);
   assert.deepEqual(state.requested, ["IMG-001"]);
   assert.equal(state.totals.checkedBytes, state.totals.allBytes);
-  assert.equal(state.lastRequest, null);
+  assert.deepEqual(state.send, { baseline: null, last: null, notice: null });
+  assert.deepEqual(state.images.map((image) => [image.inLastRequest, image.inNextRequest]), [[null, true], [null, true], [null, true]], "without a recorded request every image counts");
+});
+
+test("the size baseline: images the last request carried, images added since, and images compacted away", () => {
+  const options = sampleSessions(turn("t3") + line("response_item", {
+    type: "message", id: "msg_3", role: "user",
+    content: [{ type: "input_image", image_url: `data:image/png;base64,${red.toString("base64")}` }],
+    internal_chat_message_metadata_passthrough: { turn_id: "t3" },
+  }));
+  // The last request (turn 2) carried IMG-002 and IMG-003; IMG-001 had been compacted away; IMG-004 came later.
+  recordRequest(THREAD, { at: "2026-09-24T12:00:00Z", transport: "http", turnId: "t2", decodedBytes: 5000, imageSizes: { "msg_1#1": 100, "msg_1#2": 100 }, rewrite: { replaced: [{ id: "IMG-003" }], decodedBefore: 5000, decodedAfter: 4500 } }, requestStatsDirOf(options.dataRoot));
+  const state = loadPanelState(THREAD, options);
+  assert.deepEqual(state.images.map((image) => [image.id, image.inLastRequest, image.inNextRequest]), [
+    ["IMG-001", false, false], ["IMG-002", true, true], ["IMG-003", true, true], ["IMG-004", false, true],
+  ]);
+  assert.deepEqual(state.send, {
+    baseline: { at: "2026-09-24T12:00:00Z", bytes: 5000 },
+    last: { at: "2026-09-24T12:00:00Z", bytesBefore: 5000, bytesAfter: 4500, replaced: 1, skipped: false },
+    notice: null,
+  });
+});
+
+test("the panel is told when the engine could not rewrite, or a WebSocket turn kept the unchecked images", () => {
+  const http = { at: "t1", transport: "http", decodedBytes: 900, rewrite: { skipped: "thread index: Error: boom" } };
+  assert.deepEqual(sendInfo({ latest: http, lastHttp: http }).notice, { kind: "skipped", at: "t1", reason: "读取这个任务的记录失败" });
+  assert.deepEqual(sendInfo({ latest: { ...http, rewrite: { skipped: "rewrite failed: x" } }, lastHttp: { ...http, rewrite: { skipped: "rewrite failed: x" } } }).notice?.kind, "skipped");
+  const busy = { at: "t2", transport: "websocket", event: "active-while-unchecked" };
+  assert.deepEqual(sendInfo({ latest: busy, lastHttp: http }).notice, { kind: "websocket", at: "t2" });
+  assert.equal(sendInfo({ latest: { at: "t3", transport: "http", decodedBytes: 800, rewrite: { replaced: [] } }, lastHttp: null }).notice, null);
+  assert.equal(sendInfo({ latest: http, lastHttp: http }).baseline, null, "a request without image sizes is no baseline");
 });
 
 test("check and uncheck are kept per thread and validated", () => {

@@ -1,12 +1,12 @@
 // Purpose: P3-3 — what the panel shows for one thread: every image occurrence with its state, the ids the model asked
 // for in its latest reply, and the engine's statistics of the latest request. Also applies check/uncheck actions.
-// P4 — serves each image for the panel's thumbnails and previews.
+// P4 — serves each image for the panel's thumbnails and previews, and the inputs of its "next message" estimate:
+// the last full request as a size baseline, which images it carried, and whether the engine could not rewrite it.
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { dataDir, requestStatsDirOf, selectionDirOf } from "./paths.ts";
+import { readRequestStats, type RequestStats } from "./request-stats.ts";
 import { effectiveSelection, writeSelection } from "./selection.ts";
 import { buildIndex, imageData, readThreadHistory, type IndexedImage, type ThreadIndex } from "./thread-index.ts";
 import { pngThumbnail } from "./thumbnail.ts";
@@ -15,14 +15,50 @@ type Json = Record<string, any>;
 type Record_ = { type: string; payload: Json };
 export type PanelImage = {
   id: string; kind: string; name: string | null; label: string | null; turn: number | null;
-  width: number | null; height: number | null; bytes: number;
+  width: number | null; height: number | null; bytes: number; base64Chars: number;
   sameAs: string[]; checked: boolean; replaceable: boolean; requested: boolean;
+  // Whether the last full request carried it (null: no such request recorded yet), and whether the next one will
+  // (carried last time, or added since; images compacted out of the history will not come back).
+  inLastRequest: boolean | null; inNextRequest: boolean;
+};
+export type SendInfo = {
+  // The last full HTTP request as Codex built it, before any rewrite: the baseline of the estimate.
+  baseline: { at: string; bytes: number } | null;
+  // What the engine sent for that request.
+  last: { at: string; bytesBefore: number; bytesAfter: number; replaced: number; skipped: boolean } | null;
+  notice: { kind: "skipped"; at: string; reason: string } | { kind: "websocket"; at: string } | null;
 };
 export type PanelState = {
   threadId: string; turns: number; images: PanelImage[]; requested: string[];
   totals: { images: number; unchecked: number; checkedBytes: number; allBytes: number };
-  lastRequest: Json | null;
+  send: SendInfo;
 };
+
+// The engine's reasons for forwarding a request unchanged, in the user's words.
+const SKIP_REASONS: Array<[RegExp, string]> = [
+  [/^undecodable body/, "请求内容无法解压"],
+  [/^unparsable body/, "请求内容无法解析"],
+  [/^no input array/, "请求的格式和预期不同"],
+  [/^integer beyond/, "请求里有超大整数，改写会改变它的值"],
+  [/^thread index/, "读取这个任务的记录失败"],
+];
+
+export function sendInfo(stats: RequestStats | null): SendInfo {
+  const latest = stats?.latest ?? null;
+  const http = stats?.lastHttp ?? null;
+  const bytes = typeof http?.decodedBytes === "number" ? http.decodedBytes : null;
+  const rewrite = http?.rewrite ?? null;
+  let notice: SendInfo["notice"] = null;
+  if (latest?.transport === "websocket" && (latest.event === "active-while-unchecked" || latest.activeWhileUnchecked)) notice = { kind: "websocket", at: latest.at };
+  else if (latest?.transport === "http" && rewrite?.skipped) {
+    notice = { kind: "skipped", at: http!.at, reason: SKIP_REASONS.find(([pattern]) => pattern.test(rewrite.skipped))?.[1] ?? "改写时出错" };
+  }
+  return {
+    baseline: http && bytes !== null && http.imageSizes ? { at: http.at, bytes } : null,
+    last: http && bytes !== null ? { at: http.at, bytesBefore: bytes, bytesAfter: rewrite?.decodedAfter ?? bytes, replaced: rewrite?.replaced?.length ?? 0, skipped: !!rewrite?.skipped } : null,
+    notice,
+  };
+}
 export type PanelOptions = { sessionsDir: string; dataRoot?: string };
 
 // "需要 IMG-004" or a list right after it ("需要 IMG-004、IMG-002 和 IMG-007"); a full stop ends the list.
@@ -57,16 +93,25 @@ export function sameContent(index: ThreadIndex, image: IndexedImage): string[] {
     .map((other) => other.id);
 }
 
-export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, lastRequest: Json | null): PanelState {
+export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, stats: RequestStats | null): PanelState {
   const requested = requestedIds(history);
-  const images = index.images.map((image): PanelImage => ({
-    id: image.id, kind: image.kind, name: image.name, label: image.label, turn: image.turn,
-    width: image.width, height: image.height, bytes: image.bytes,
-    sameAs: sameContent(index, image),
-    checked: !unchecked.has(image.key),
-    replaceable: image.replaceable,
-    requested: requested.includes(image.id),
-  }));
+  const carried: Record<string, number> | null = stats?.lastHttp?.imageSizes ?? null;
+  // Images after the last one that request carried, or from a later turn, were added since and go out next time.
+  const lastCarried = carried ? index.images.reduce((last, image, position) => (image.key in carried ? position : last), -1) : -1;
+  const lastTurn = stats?.lastHttp?.turnId ? index.turnNumbers.get(stats.lastHttp.turnId) ?? null : null;
+  const images = index.images.map((image, position): PanelImage => {
+    const inLast = carried ? image.key in carried : null;
+    return {
+      id: image.id, kind: image.kind, name: image.name, label: image.label, turn: image.turn,
+      width: image.width, height: image.height, bytes: image.bytes, base64Chars: image.base64Chars,
+      sameAs: sameContent(index, image),
+      checked: !unchecked.has(image.key),
+      replaceable: image.replaceable,
+      requested: requested.includes(image.id),
+      inLastRequest: inLast,
+      inNextRequest: inLast !== false || position > lastCarried || (lastTurn !== null && image.turn !== null && image.turn > lastTurn),
+    };
+  });
   return {
     threadId, turns: index.turns, images, requested,
     totals: {
@@ -75,7 +120,7 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
       checkedBytes: images.filter((image) => image.checked).reduce((sum, image) => sum + image.bytes, 0),
       allBytes: images.reduce((sum, image) => sum + image.bytes, 0),
     },
-    lastRequest,
+    send: sendInfo(stats),
   };
 }
 
@@ -94,18 +139,17 @@ function load(threadId: string, options: PanelOptions) {
   const history = historyOf(threadId, options.sessionsDir);
   const index = buildIndex(threadId, history);
   const selection = effectiveSelection(threadId, options.sessionsDir, selectionDirOf(root));
-  const statsFile = join(requestStatsDirOf(root), `${threadId}.json`);
-  const lastRequest = existsSync(statsFile) ? JSON.parse(readFileSync(statsFile, "utf8")) : null;
-  return { root, history, index, selection, lastRequest };
+  const stats = readRequestStats(threadId, requestStatsDirOf(root));
+  return { root, history, index, selection, stats };
 }
 
 export function loadPanelState(threadId: string, options: PanelOptions): PanelState {
-  const { history, index, selection, lastRequest } = load(threadId, options);
-  return panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), lastRequest);
+  const { history, index, selection, stats } = load(threadId, options);
+  return panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats);
 }
 
 export function applySelection(threadId: string, change: { uncheck?: string[]; check?: string[]; checkAll?: boolean }, options: PanelOptions): PanelState {
-  const { root, history, index, selection, lastRequest } = load(threadId, options);
+  const { root, history, index, selection, stats } = load(threadId, options);
   const unchecked = change.checkAll ? {} : { ...selection.unchecked };
   const byId = new Map(index.images.map((image) => [image.id, image]));
   for (const id of change.uncheck ?? []) {
@@ -120,7 +164,7 @@ export function applySelection(threadId: string, change: { uncheck?: string[]; c
     delete unchecked[image.key];
   }
   writeSelection({ threadId, unchecked }, selectionDirOf(root));
-  return panelState(threadId, history, index, new Set(Object.keys(unchecked)), lastRequest);
+  return panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats);
 }
 
 // One image for the panel: a PNG larger than maxSide is scaled down; smaller PNGs and other formats (which the

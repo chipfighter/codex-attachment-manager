@@ -2,10 +2,11 @@
 // MCP Apps host side of the bridge) around the real panel.html, and answers its tool calls with the real plugin
 // server code over a synthetic thread of test images (no user material).
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
-// (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls).
+// (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
+// ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request).
 // Everything is written to a temporary folder; nothing in the user's Codex home is read or changed.
 
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,10 +52,31 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4"));
 
 const { callTool } = await import("../src/plugin-server.ts");
+const { imageSizesOf } = await import("../src/proxy.ts");
+const { recordRequest } = await import("../src/request-stats.ts");
+const { requestStatsDirOf } = await import("../src/paths.ts");
 const sessionsDir = join(root, "sessions");
 const meta = { threadId: THREAD, thread_id: THREAD };
-// Start with the red square and the copy of the blue circle unchecked, so both placeholder kinds show.
-callTool("cam_set_selection", { uncheck: ["IMG-001", "IMG-005"] }, meta, sessionsDir);
+// Start with the red square, the copy of the blue circle and the large noise image unchecked, so both placeholder
+// kinds and a visible saving show.
+callTool("cam_set_selection", { uncheck: ["IMG-001", "IMG-005", "IMG-006"] }, meta, sessionsDir);
+
+// What the engine would have recorded: the last full request came in turn 3 (turn 4's images are new since) and had
+// IMG-001, IMG-005 and IMG-006 replaced. ?stats=skipped|websocket|none shows the other cases.
+function writeStats(kind: string): void {
+  const dir = requestStatsDirOf(process.env.CAM_DATA_DIR);
+  rmSync(join(dir, `${THREAD}.json`), { force: true });
+  if (kind === "none") return;
+  const items = readFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`), "utf8").trim().split("\n").map((raw) => JSON.parse(raw)).filter((record) => record.type === "response_item").map((record) => record.payload);
+  const sizes = Object.fromEntries(Object.entries(imageSizesOf(items)).slice(0, 6));
+  const imageChars = Object.values(sizes).reduce((sum, chars) => sum + chars, 0);
+  const before = imageChars + 180_000;
+  const replaced = [sizes["msg_1#0"], sizes["msg_3#0"], sizes["msg_3#1"]];
+  const rewrite = kind === "skipped" ? { skipped: "thread index: Error: demo" } : { replaced: [{ id: "IMG-001" }, { id: "IMG-005" }, { id: "IMG-006" }], decodedBefore: before, decodedAfter: before - replaced.reduce((sum, chars) => sum + chars, 0) + 2100 };
+  const at = new Date(Date.now() - 6 * 60_000).toISOString();
+  recordRequest(THREAD, { at, transport: "http", turnId: "t3", decodedBytes: before, imageSizes: sizes, rewrite }, dir);
+  if (kind === "websocket") recordRequest(THREAD, { at: new Date().toISOString(), transport: "websocket", event: "active-while-unchecked" }, dir);
+}
 
 // ---- the host page: a stand-in for Codex's side panel ----
 const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>面板开发页</title><style>
@@ -70,7 +92,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   .tools { position: fixed; left: 10px; top: 10px; display: flex; gap: 6px; } .tools button { font: inherit; }
   body.solo .chat, body.solo .tools, body.solo .tabs { display: none; } body.solo .panel { width: 100%; border: 0; }
 </style></head><body><div class="tools"><button id="theme">切换明暗</button><button id="grow">加一张图</button></div>
-<div class="chat">（对话区）</div><div class="panel"><div class="tabs"><span class="tab">上下文素材</span></div><iframe id="app" src="/panel.html"></iframe></div>
+<div class="chat">（对话区）</div><div class="panel"><div class="tabs"><span class="tab">上下文素材</span></div><iframe id="app"></iframe></div>
 <script>
   const params = new URLSearchParams(location.search);
   let theme = params.get("theme") === "dark" ? "dark" : "light";
@@ -98,6 +120,8 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   }
   document.getElementById("theme").onclick = () => { theme = theme === "dark" ? "light" : "dark"; document.body.classList.toggle("dark", theme === "dark"); send({ method: "ui/notifications/host-context-changed", params: { theme } }); };
   document.getElementById("grow").onclick = () => fetch("/grow", { method: "POST" });
+  // The engine statistics for this page load, then the panel.
+  fetch("/stats?kind=" + (params.get("stats") || "normal"), { method: "POST" }).then(() => { frame.src = "/panel.html"; });
 </script></body></html>`;
 
 let extra = 0;
@@ -105,6 +129,10 @@ createServer((request, response) => {
   const reply = (status: number, type: string, body: string) => { response.writeHead(status, { "content-type": type, "cache-control": "no-store" }); response.end(body); };
   if (request.method === "GET" && (request.url === "/" || request.url?.startsWith("/?"))) return reply(200, "text/html; charset=utf-8", HOST);
   if (request.method === "GET" && request.url === "/panel.html") return reply(200, "text/html; charset=utf-8", readFileSync(join(here, "..", "src", "panel.html"), "utf8"));
+  if (request.method === "POST" && request.url?.startsWith("/stats")) {
+    writeStats(new URL(request.url, "http://x").searchParams.get("kind") ?? "normal");
+    return reply(200, "application/json", "{}");
+  }
   if (request.method === "POST" && request.url === "/grow") {
     // A new turn with one more upload, to watch the panel pick it up by polling.
     extra++;

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import zlib from "node:zlib";
-import { describeBody, hasUnchecked, hasUnsafeInteger, outboundProxy, rewriteBody, requestIdentity } from "./proxy.ts";
+import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, outboundProxy, rewriteBody, requestIdentity } from "./proxy.ts";
 import { writeSelection } from "./selection.ts";
 import { png } from "./testkit.ts";
 
@@ -47,6 +47,14 @@ test("request metadata counts images in messages and in tool outputs, without co
   assert.deepEqual(described, { kind: "responses", model: "m", inputItems: 2, images: 2, imageBytes: "data:image/png;base64,AAAA".length + "data:image/png;base64,BBBBBBBB".length, stream: true, promptCacheKey: "thread-a" });
   assert.doesNotMatch(JSON.stringify(described), /secret words/);
   assert.equal(describeBody("/backend-api/codex/images/edits", { model: "gpt-image", images: [{}, {}], size: "1024x1024" }).kind, "image_edit");
+});
+
+test("the size baseline names each image by its index key, with its base64 length and nothing else", () => {
+  const input = [
+    { type: "message", id: "msg_1", role: "user", content: [{ type: "input_text", text: "secret words" }, { type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
+    { type: "custom_tool_call_output", call_id: "c1", output: [{ type: "input_image", image_url: "data:image/png;base64,BBBBBBBB" }] },
+  ];
+  assert.deepEqual(imageSizesOf(input), { "msg_1#0": 4, "custom_tool_call_output:c1#0": 8 });
 });
 
 test("integers JavaScript cannot hold exactly are detected outside strings only", () => {

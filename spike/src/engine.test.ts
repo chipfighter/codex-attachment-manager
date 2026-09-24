@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, watchForCodex } from "./engine.ts";
-import { recordRequest } from "./proxy.ts";
+import { readRequestStats, recordRequest } from "./request-stats.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -58,9 +58,19 @@ test("ensure starts one engine; a second start on the same port leaves it alone"
 test("request statistics are written per thread, and only for real thread ids", () => {
   const dir = mkdtempSync(join(tmpdir(), "cam-stats-"));
   const thread = "01a0d301-0000-7000-8000-000000000001";
-  recordRequest(thread, { at: "2026-09-24T12:00:00Z", images: 3 }, dir);
-  assert.equal(JSON.parse(readFileSync(join(dir, `${thread}.json`), "utf8")).images, 3);
+  recordRequest(thread, { at: "2026-09-24T12:00:00Z", transport: "http", images: 3 }, dir);
+  assert.equal(JSON.parse(readFileSync(join(dir, `${thread}.json`), "utf8")).latest.images, 3);
   recordRequest("../escape", { images: 1 }, dir);
   recordRequest(null, { images: 1 }, dir);
   assert.equal(existsSync(join(dir, "..", "escape.json")), false);
+});
+
+test("a WebSocket event becomes the latest without erasing the last full HTTP request", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cam-stats-"));
+  const thread = "01a0d301-0000-7000-8000-000000000002";
+  recordRequest(thread, { at: "t1", transport: "http", decodedBytes: 100 }, dir);
+  recordRequest(thread, { at: "t2", transport: "websocket", event: "open" }, dir);
+  assert.deepEqual(readRequestStats(thread, dir), { latest: { at: "t2", transport: "websocket", event: "open" }, lastHttp: { at: "t1", transport: "http", decodedBytes: 100 } });
+  recordRequest(thread, { at: "t3", transport: "http", decodedBytes: 50 }, dir);
+  assert.equal(readRequestStats(thread, dir)!.lastHttp!.decodedBytes, 50);
 });
