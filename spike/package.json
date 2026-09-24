@@ -1,0 +1,13 @@
+{
+  "name": "codex-attachment-manager-phase0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "index": "node src/index.ts",
+    "match": "node src/match.ts"
+  }
+}

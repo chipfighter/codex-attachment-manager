@@ -12,26 +12,26 @@
 
 ## 任务
 
-- [ ] **T0 准备**
+- [x] **T0 准备**（证据：`spike/package.json`、`spike/tsconfig.json`、`local/phase0-report-draft.md`、`local/protocol-types/`）
   - 在 `spike/` 下初始化 TypeScript/Node 工程。
   - 记录桌面版版本，以及桌面版自带的 `codex.exe` 的路径和版本。路径写成 `%LOCALAPPDATA%\…` 这样的通用形式。
   - 确认样本任务（原任务和 fork）的线程 ID，以及它们的历史存在 JSONL 里还是 SQLite 里。
   - 用 `codex app-server generate-ts` 生成本机的协议类型。
   - 完成标准：以上信息都写进报告草稿。
 
-- [ ] **T1 只读导入**（关卡 1）
+- [x] **T1 只读导入**（关卡 1；证据：`local/assets.json`、`local/assets.md`、`local/phase0-report-draft.md`）
   - 读取样本的记录，输出一份素材清单，同时给出 JSON 和便于阅读的表格。每条出现记录包括：轮次、时间、来源类型、字节数、字节哈希、像素哈希、尺寸、已知的本地路径。
   - 标出重复关系，无法识别的项单独列出。
   - 操作前后，对样本的记录文件分别计算哈希并对比。
   - 完成标准：满足 spec 关卡 1。
 
-- [ ] **T2 找到磁盘上的原件**
+- [x] **T2 找到磁盘上的原件**（证据：`local/matches.json`、`local/matches.md`、`local/cache/`）
   - 在样本任务所用的项目素材文件夹（包括子目录；位置执行者已知，不写进仓库）和 `generated_images/` 里，按哈希找每份素材的原件。
   - 如果 Codex 发送前缩放过图片，导致哈希对不上，记下有多少张。然后把图片缩放到相同尺寸再比较相似度，给出候选匹配，标为“待确认”。
   - 统计“找到原件”和“只存在于记录里”各有多少。后者解码后缓存到 `local/`。
   - 完成标准：每份素材都有一个可以当附件用的本地文件。
 
-- [ ] **T3 连上 app-server**
+- [x] **T3 连上 app-server**（证据：`local/t3-connect.json`、`local/sqlite-backup/`；由 Claude 执行）
   - 按 plan“安全措施”备份 SQLite 状态库。
   - 用桌面版自带的 `codex.exe` 启动一个独立的 app-server（stdio），完成 `initialize`，再调用只读的 `thread/list`。
   - 如果被沙箱拦下，请用户批准提权，或者请用户在普通终端里运行。
