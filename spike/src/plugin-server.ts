@@ -1,5 +1,5 @@
 // Purpose: P3-3 — the plugin's MCP server, started by Codex for each session. It keeps the engine (local proxy)
-// running — at start and every few seconds, so a crashed engine comes back — and serves the panel's data tools:
+// running — at start and every 3 seconds, so a crashed engine comes back — and serves the panel's data tools:
 // the thread's images and their state, check/uncheck, and thumbnails.
 // Only the user may check or uncheck: calls the model makes (they carry Codex's turn metadata) are refused.
 // Input: MCP JSON-RPC over stdio. Env: CAM_ENGINE_PORT (default 17891), CAM_NO_ENGINE=1 (tests), CAM_DATA_DIR.
@@ -93,7 +93,8 @@ function main(): void {
   log({ event: "start", ppid: process.ppid });
   // Codex starts several instances at once; a little jitter keeps them from racing to start the engine.
   setTimeout(supervise, Math.floor(Math.random() * 400));
-  setInterval(supervise, 10_000);
+  // Short enough that a crashed engine is back within Codex's own retry window.
+  setInterval(supervise, 3000);
   process.stdin.on("close", () => { log({ event: "stdin-closed" }); process.exit(0); });
   createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
     if (!line.trim()) return;

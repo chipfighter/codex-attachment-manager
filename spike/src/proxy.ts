@@ -340,6 +340,10 @@ async function main(): Promise<void> {
         if (!live.has(identity.threadId)) live.set(identity.threadId, new Set());
         live.get(identity.threadId)!.add(connection);
       }
+      // Logged at open as well: a connection that dies with the engine would otherwise leave no trace.
+      const opened = { at: new Date(started).toISOString(), id, transport: "websocket", event: "open", path, ...identity };
+      log(opened);
+      recordRequest(identity.threadId, opened);
       const lines = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i];
