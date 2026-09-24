@@ -129,17 +129,21 @@
 - **路径后缀**：地址必须以 `/backend-api/codex` 结尾，否则 Codex 会关掉后端专用的接口。所以代理地址用 `http://127.0.0.1:<端口>/backend-api/codex`，代理再把同样的路径转发到 `https://chatgpt.com`。
 - **经过的接口**：对话走 `…/responses`，默认用 WebSocket，失败时回退到 HTTP；生图、改图走同一个通道的 `…/images/generations` 和 `…/images/edits`。
 - **认出任务**：每个请求的请求头里都有 `x-codex-turn-metadata`（其中有 thread_id、turn_id），请求体里还有 `prompt_cache_key`，代理据此认出请求属于哪个任务。
-- **系统代理**：验证机开着系统代理，而且 `127.0.0.1` 在 `NO_PROXY` 里。我们的代理往外连 chatgpt.com 时，自动沿用系统代理设置（环境变量或 Windows 设置），不需要用户填写。
+- **系统代理**：我们的代理往外连 chatgpt.com 时，自动沿用系统代理设置（环境变量或 Windows 设置），不需要用户填写。
+- **Codex 连本地代理（P1 实测）**：
+  - Codex 默认按环境变量选择代理。用户环境里有 `HTTP(S)_PROXY`、没有 `NO_PROXY` 时，连本地地址的请求也会被交给系统代理，然后失败。
+  - 所以要同时打开 `features.respect_system_proxy`，让 Codex 先看 Windows 的代理设置，并把地址写成 `localhost`：Windows 设置里的 `<local>` 只让不带点的主机名直连。
+  - 生图和改图要等 Codex 包含 #47742 的版本才会遵守这个开关。详见 [p1-report.md](p1-report.md)。
 
 ### P1：只转发、不改写
 
 - **转发**：原样转发 HTTP 请求和 WebSocket 连接，不改动任何字节，结果按流式返回。
 - **日志**：只记元数据，包括方法、路径、状态码、字节数、耗时、任务 ID，以及请求里的图片数量和字节数。不记认证信息，也不记对话内容。
 - **配置**：
-  - 工具在 `config.toml` 顶层插入一段带标记的设置；
+  - 工具管理两段带标记的设置：顶层的 `openai_base_url`，以及 `[features]` 里的 `respect_system_proxy`（没有这张表时，改为顶层的 `features.respect_system_proxy`）；
   - 改之前把原文件备份到 `local/`；
-  - 恢复时只删掉这一段，其余内容逐字节不变；
-  - 如果用户自己已经设了 `openai_base_url`，不覆盖，直接报告。
+  - 恢复时只删掉带标记的段落。桌面版运行时自己也会写 `config.toml`，所以绝不能用旧备份整体覆盖；
+  - 用户自己设过 `openai_base_url`，或者把 `respect_system_proxy` 设成了 false，一律不覆盖，直接报告。
 - **验证顺序**：
   1. 先用我们自己启动的 app-server 走一遍：文字、附图、生图、改图。这一步用 `-c openai_base_url=…` 指定地址，不改配置。
   2. 再改桌面版的配置。用户重启桌面版后，在任务里依次发文字、上传图片、让它生图、让它改图。
