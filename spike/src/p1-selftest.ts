@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { AppServer, findBundledCodex } from "./appserver.ts";
+import { TEST_MODEL } from "./testkit.ts";
 
 type Json = Record<string, any>;
 const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
   let threadId = "";
   try {
     await server.initialize();
-    const started = await server.request<{ thread: Json }>("thread/start", { cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: true });
+    const started = await server.request<{ thread: Json }>("thread/start", { model: TEST_MODEL, cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: true });
     threadId = started.thread.id;
     const text = (value: string) => ({ type: "text", text: value, text_elements: [] });
     results.text = await turn(server, threadId, [text("请只回复“收到”两个字。")]);

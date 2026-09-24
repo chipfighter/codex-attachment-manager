@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex } from "./appserver.ts";
 import { codexHome } from "./codexconfig.ts";
 import { readSelection, writeSelection } from "./selection.ts";
-import { runTurn, testImages, text } from "./testkit.ts";
+import { runTurn, TEST_MODEL, testImages, text } from "./testkit.ts";
 import { loadThreadIndex } from "./thread-index.ts";
 
 type Json = Record<string, any>;
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   let threadId = "";
   try {
     await server.initialize();
-    const { thread } = await server.request<{ thread: Json }>("thread/start", { cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: false });
+    const { thread } = await server.request<{ thread: Json }>("thread/start", { model: TEST_MODEL, cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: false });
     threadId = thread.id;
     result.threadId = threadId;
     await server.request("thread/name/set", { threadId, name: `[CAM测试] P2 改写自测 ${label}` });

@@ -7,7 +7,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex } from "./appserver.ts";
-import { runTurn, testImages, text } from "./testkit.ts";
+import { runTurn, TEST_MODEL, testImages, text } from "./testkit.ts";
 
 type Json = Record<string, any>;
 const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   const result: Json = { createdAt: startedAt, label, turns: {} };
   try {
     await server.initialize();
-    const { thread } = await server.request<{ thread: Json }>("thread/start", { cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: false });
+    const { thread } = await server.request<{ thread: Json }>("thread/start", { model: TEST_MODEL, cwd: workDir, approvalPolicy: "never", sandbox: "read-only", ephemeral: false });
     result.threadId = thread.id;
     await server.request("thread/name/set", { threadId: thread.id, name: `[CAM测试] P2-1 请求结构 ${label}` });
     result.turns.upload = await runTurn(server, thread.id, [text("这是三张测试图，先不用描述，只回复“收到”。"), ...["a.png", "b.png", "b-copy.png"].map((name) => ({ type: "localImage", path: file(name) }))]);
