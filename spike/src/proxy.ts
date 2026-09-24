@@ -1,21 +1,25 @@
-// Purpose: P1-2 — transparent local proxy between Codex and the ChatGPT backend. HTTP requests and WebSocket
-// upgrades are forwarded byte for byte; only metadata is logged (never auth headers or conversation content).
-// Input: [--port 17891] [--force-http] [--dump-requests (synthetic test threads only)]; the outbound proxy is taken
-// from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
-// Output: responses streamed back to Codex; one JSON line per request in local/proxy/<date>.jsonl.
+// Purpose: the engine — local proxy between Codex and the ChatGPT backend. P1: HTTP requests and WebSocket upgrades
+// are forwarded byte for byte. P2: requests of threads with unchecked images are rewritten. P3: one instance per
+// machine, exits once no Codex process is left, and keeps per-thread statistics of the latest request.
+// Only metadata is logged (never auth headers or conversation content).
+// Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
+// the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
+// Output: responses streamed back to Codex; <data dir>/proxy/<date>.jsonl; <data dir>/state/requests/<thread>.json.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { codexHome } from "./codexconfig.ts";
+import { DEFAULT_PORT, ENGINE_SERVICE, engineHealth, watchForCodex } from "./engine.ts";
 import type { ImageRef } from "./images.ts";
+import { dataDir, proxyLogDirOf, requestStatsDirOf } from "./paths.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
 import { readSelection, selectionDir } from "./selection.ts";
 import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
@@ -23,7 +27,7 @@ import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.t
 type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade", "host"]);
-const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");
+const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Outbound proxy: environment first, then the Windows per-user setting; NO_PROXY is honoured for the upstream host.
 export function outboundProxy(env = process.env, windowsSetting = readWindowsProxy): { host: string; port: number } | null {
@@ -121,8 +125,18 @@ export function describeBody(path: string, json: Json): Json {
 }
 
 function log(entry: Json): void {
-  mkdirSync(join(localRoot, "proxy"), { recursive: true });
-  appendFileSync(join(localRoot, "proxy", `${new Date().toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(entry)}\n`);
+  const dir = proxyLogDirOf();
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, `${new Date().toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(entry)}\n`);
+}
+
+// P3: the latest /responses request of each thread, for the panel's "what was sent" view. Metadata only.
+export function recordRequest(threadId: string | null, stats: Json, dir = requestStatsDirOf()): void {
+  if (!threadId || !THREAD_ID.test(threadId)) return;
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${threadId}.json`);
+  writeFileSync(`${file}.tmp`, JSON.stringify(stats, null, 2));
+  renameSync(`${file}.tmp`, file);
 }
 
 // P2-1 debugging aid for synthetic test threads only: the request with every inline image reduced to its hash and size.
@@ -193,15 +207,29 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
   return { body, report: { ...summary, decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const portIndex = process.argv.indexOf("--port");
-  const port = Number(portIndex >= 0 ? process.argv[portIndex + 1] : 17891);
+  const port = Number(portIndex >= 0 ? process.argv[portIndex + 1] : DEFAULT_PORT);
+  // One engine per machine: a second start leaves the running one alone.
+  const running = await engineHealth(port);
+  if (running) {
+    console.log(JSON.stringify({ alreadyRunning: true, pid: running.pid, port }));
+    return;
+  }
   // --force-http answers every Responses WebSocket upgrade with 426, Codex's own signal to use HTTP for the session.
   const forceHttp = process.argv.includes("--force-http");
-  const dumpDir = process.argv.includes("--dump-requests") ? join(localRoot, "p2", "requests") : null;
+  const dumpDir = process.argv.includes("--dump-requests") ? join(dataDir(), "p2", "requests") : null;
   const sessionsDir = join(codexHome(), "sessions");
   const via = outboundProxy();
+  const startedAt = new Date().toISOString();
   let sequence = 0;
+  log({ at: startedAt, event: "engine-start", pid: process.pid, port });
+  if (!process.argv.includes("--stay")) {
+    watchForCodex(() => {
+      log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: "no Codex process left" });
+      process.exit(0);
+    });
+  }
   // Open WebSocket connections per thread. Over WebSocket Codex only sends new items and the server keeps the rest,
   // so a thread with unchecked images must move to HTTP: its idle connections are closed, and its next upgrade gets 426.
   const live = new Map<string, Set<{ client: Duplex; socket: tls.TLSSocket; last: number; closedForSelection: boolean }>>();
@@ -220,7 +248,7 @@ function main(): void {
   const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/__cam/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
+      res.end(JSON.stringify({ ok: true, service: ENGINE_SERVICE, pid: process.pid, startedAt, port, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
       return;
     }
     const id = ++sequence;
@@ -252,7 +280,9 @@ function main(): void {
           }
         } catch { details = { kind: "unparsed" }; }
       }
-      log({ at: new Date(started).toISOString(), id, transport: "http", method: req.method, path, status, requestBytes, decodedBytes: decoded?.length ?? null, contentEncoding: req.headers["content-encoding"] ?? null, responseBytes, ms: Date.now() - started, ...identity, ...details, ...extra, error: error ?? null });
+      const entry = { at: new Date(started).toISOString(), id, transport: "http", method: req.method, path, status, requestBytes, decodedBytes: decoded?.length ?? null, contentEncoding: req.headers["content-encoding"] ?? null, responseBytes, ms: Date.now() - started, ...identity, ...details, ...extra, error: error ?? null };
+      log(entry);
+      if (/\/responses$/.test(path)) recordRequest(identity.threadId, entry);
     };
     // body === null streams the request through unchanged.
     const send = (headers: Record<string, string | string[]>, body: Buffer | null) => connectUpstream(via).then((socket) => {
@@ -310,6 +340,10 @@ function main(): void {
         if (!live.has(identity.threadId)) live.set(identity.threadId, new Set());
         live.get(identity.threadId)!.add(connection);
       }
+      // Logged at open as well: a connection that dies with the engine would otherwise leave no trace.
+      const opened = { at: new Date(started).toISOString(), id, transport: "websocket", event: "open", path, ...identity };
+      log(opened);
+      recordRequest(identity.threadId, opened);
       const lines = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i];
@@ -329,7 +363,9 @@ function main(): void {
         socket.destroy();
         client.destroy();
         if (identity.threadId) live.get(identity.threadId)?.delete(connection);
-        log({ at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, ...identity });
+        const entry = { at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, ...identity };
+        log(entry);
+        recordRequest(identity.threadId, entry);
       };
       socket.on("close", close);
       client.on("close", close);
@@ -346,11 +382,18 @@ function main(): void {
     const server = http.createServer(onRequest);
     server.on("upgrade", onUpgrade);
     server.requestTimeout = 0;
-    server.on("error", (error) => console.error(JSON.stringify({ host, error: String(error) })));
+    server.on("error", (error: NodeJS.ErrnoException) => {
+      console.error(JSON.stringify({ host, error: String(error) }));
+      // Another program holds the port (or a second engine won a race): this one must not run half-bound.
+      if (error.code === "EADDRINUSE") {
+        log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: `port ${port} in use on ${host}` });
+        process.exit(1);
+      }
+    });
     server.listen(port, host, () => {
       console.log(JSON.stringify({ listening: `http://${host.includes(":") ? `[${host}]` : host}:${port}/backend-api/codex`, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
     });
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
