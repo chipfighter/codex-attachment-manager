@@ -52,14 +52,18 @@ function records(file: string): Parsed[] {
   return cache.records;
 }
 
-// The thread's segments: the first uses the thread id itself, later pages are named <thread>_<segment>.
-function segmentsOf(sessionsDir: string, threadId: string): Map<string, string> {
+// Every rollout segment by id: a thread's first segment uses the thread id itself, later pages are named
+// <thread>_<segment>. A fork's history_base points into its parent's segments, so bases are looked up globally.
+function allSegments(sessionsDir: string): { segments: Map<string, string>; threadOf: Map<string, string> } {
   const segments = new Map<string, string>();
+  const threadOf = new Map<string, string>();
   for (const file of walk(sessionsDir)) {
     const match = SEGMENT_NAME.exec(basename(file));
-    if (match && match[1] === threadId) segments.set(match[2] ?? match[1], file);
+    if (!match) continue;
+    segments.set(match[2] ?? match[1], file);
+    threadOf.set(match[2] ?? match[1], match[1]);
   }
-  return segments;
+  return { segments, threadOf };
 }
 
 const baseOf = (file: string): Json | null => (records(file)[0]?.type === "session_meta" ? records(file)[0].payload.history_base ?? null : null);
@@ -119,14 +123,26 @@ export function buildIndex(threadId: string, history: Parsed[]): ThreadIndex {
     images.push(entry);
     byKey.set(ref.key, entry);
   }
+  // An image whose own name is unknown (e.g. viewed through a variable path) takes the name of an identical one.
+  for (const entry of images) {
+    if (entry.name) continue;
+    const twin = images.find((other) => other.name && (other.contentId === entry.contentId || (entry.pixelSha256 !== null && other.pixelSha256 === entry.pixelSha256)));
+    if (twin) entry.name = twin.name;
+  }
   return { threadId, images, byKey, turns: turnNumbers.size };
 }
 
-export function loadThreadIndex(sessionsDir: string, threadId: string): ThreadIndex {
-  const segments = segmentsOf(sessionsDir, threadId);
-  if (!segments.size) throw new Error(`no rollout found for thread ${threadId}`);
-  const bases = new Set([...segments.values()].map((file) => baseOf(file)?.thread_id).filter(Boolean));
-  const heads = [...segments.keys()].filter((id) => !bases.has(id));
+// The thread's model-visible history records, following paginated segments back through history_base.
+export function readThreadHistory(sessionsDir: string, threadId: string): Parsed[] {
+  const { segments, threadOf } = allSegments(sessionsDir);
+  const own = [...segments.keys()].filter((id) => threadOf.get(id) === threadId);
+  if (!own.length) throw new Error(`no rollout found for thread ${threadId}`);
+  const bases = new Set(own.map((id) => baseOf(segments.get(id)!)?.thread_id).filter(Boolean));
+  const heads = own.filter((id) => !bases.has(id));
   if (heads.length !== 1) throw new Error(`expected one latest rollout segment for ${threadId}, found ${heads.length}`);
-  return buildIndex(threadId, effective(segments, heads[0]));
+  return effective(segments, heads[0]);
+}
+
+export function loadThreadIndex(sessionsDir: string, threadId: string): ThreadIndex {
+  return buildIndex(threadId, readThreadHistory(sessionsDir, threadId));
 }

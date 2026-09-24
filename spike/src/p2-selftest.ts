@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     turn: turnIds[entry.turnId] ?? entry.turnId,
     transport: entry.transport,
     what: entry.declined ? `declined ${entry.declined}` : entry.transport === "websocket" ? `${entry.upstreamStatus} closedForSelection=${entry.closedForSelection}` : `${entry.method} ${entry.path.split("/").pop()} ${entry.status}`,
-    rewrite: entry.rewrite ? { replaced: entry.rewrite.replaced?.map((r: Json) => `${r.id}:${r.mode}${r.sameAs ? `->${r.sameAs}` : ""}`), sent: entry.rewrite.sentImageHashes, skipped: entry.rewrite.skipped, roundTripExact: entry.rewrite.roundTripExact, decoded: [entry.rewrite.decodedBefore, entry.rewrite.decodedAfter], encoded: [entry.rewrite.encodedBefore, entry.rewrite.encodedAfter] } : null,
+    rewrite: entry.rewrite ? { replaced: entry.rewrite.replaced?.map((r: Json) => `${r.id}:${r.mode}${r.sameAs ? `->${r.sameAs}` : ""}`), sent: entry.rewrite.sentImageHashes, skipped: entry.rewrite.skipped, decoded: [entry.rewrite.decodedBefore, entry.rewrite.decodedAfter], encoded: [entry.rewrite.encodedBefore, entry.rewrite.encodedAfter] } : null,
     requestBytes: entry.requestBytes ?? entry.upBytes,
   }));
 

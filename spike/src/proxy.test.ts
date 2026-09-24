@@ -92,8 +92,8 @@ test("rewriteBody swaps the unchecked image for a placeholder and re-encodes the
   assert.ok(text.includes(blue.slice(30)), "the checked image is still there");
   assert.match(text, /\[图片 IMG-001（\[Image #1\]） 未提供｜a\.png｜用户上传｜第 1 轮｜64×64]/);
   assert.deepEqual(report.replaced, [{ id: "IMG-001", kind: "upload", mode: "plain", sameAs: null, base64Chars: red.length - "data:image/png;base64,".length }]);
-  assert.equal(report.roundTripExact, true);
   assert.ok(report.decodedAfter < report.decodedBefore);
+  assert.equal(text, JSON.stringify(JSON.parse(text)), "re-serialized as compact JSON, like Codex's own bodies");
 });
 
 test("rewriteBody forwards the original bytes when nothing applies or the body is not safe to re-serialize", () => {

@@ -89,10 +89,9 @@ function toolContext(call: Json | undefined, output: Json[]): { kind: ImageKind;
     return { kind: /imagegen|image_gen/.test(call.name ?? "") ? "generated" : "tool", names: [] };
   }
   const source = String(call.input ?? "");
-  const views = [...source.matchAll(/view_image\(\s*\{\s*path\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => {
-    try { return baseName(JSON.parse(`"${m[1]}"`)); } catch { return baseName(m[1]); }
-  });
-  if (views.length) return { kind: "view", names: views };
+  // Paths written inline are read; paths passed through variables leave the names unknown.
+  const views = [...source.matchAll(/view_image\(\s*\{\s*path\s*:\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/g)].map((m) => baseName(m[2].replace(/\\(.)/g, "$1")));
+  if (views.length || source.includes("view_image")) return { kind: "view", names: views };
   return { kind: /image_gen|imagegen|generatedImage\(/.test(source) ? "generated" : "tool", names: [] };
 }
 
