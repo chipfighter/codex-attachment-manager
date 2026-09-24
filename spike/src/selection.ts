@@ -1,14 +1,14 @@
 // Purpose: P2 — per-thread selection state: which image occurrences the user unchecked. Written by the CLI (later
 // the panel), read by the proxy on every request of that thread.
-// Input/Output: local/selection/<thread id>.json, e.g. { "threadId": "…", "unchecked": { "<key>": { "id": "IMG-003", "at": "…" } } }.
+// Input/Output: <data dir>/selection/<thread id>.json, e.g. { "threadId": "…", "unchecked": { "<key>": { "id": "IMG-003", "at": "…" } } }.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { selectionDirOf } from "./paths.ts";
 
 export type Selection = { threadId: string; unchecked: Record<string, { id: string; at: string }> };
 
-export const selectionDir = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local", "selection");
+export const selectionDir = selectionDirOf();
 const THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const cache = new Map<string, { mtimeMs: number; size: number; selection: Selection }>();
 
