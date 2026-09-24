@@ -144,7 +144,8 @@ function main(): void {
     } else if (method === "tools/call") {
       try {
         const result = callTool(params.name, params.arguments ?? {}, params._meta);
-        log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta) });
+        // The open panel reads its state every few seconds and loads each image once; only changes are worth a line.
+        if (params.name === "cam_set_selection" || fromModel(params._meta)) log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta) });
         send({ id, result });
       } catch (error) {
         log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta), error: String(error) });
