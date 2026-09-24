@@ -15,7 +15,7 @@ Codex 上下文素材管理器（暂名）：让用户逐轮决定，Codex 任�
 - 真实数据不进仓库：从真实会话和用户素材里提取的内容只能放在 `local/`（已被 git 忽略），任何时候都不提交。
 - 仓库里的文档和代码不写用户本机的具体路径；通用位置（如 `~/.codex`、`%LOCALAPPDATA%`）可以写。
 - 先在 Windows 上开发和测试。技术栈用 TypeScript/Node。
-- 分工：Claude 维护 `docs/` 下的规格和方案；Codex 按 tasks.md 执行，不修改 spec.md 和 plan.md；全部完成后由 Claude 审查代码。
+- 分工：Claude 维护 `docs/` 下的规格和方案，并负责开发和测试（阶段 0 的 T0–T2 由 Codex 完成；测试需要在 Codex 之外启动 app-server，所以从 T3 起改由 Claude 执行）。其他协作者不修改 spec.md 和 plan.md。
 
 ## Git 规范
 
