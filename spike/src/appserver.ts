@@ -41,10 +41,13 @@ export class AppServer {
   #onServerRequest: ServerRequestHandler | undefined;
   #exited: Promise<number | null>;
 
-  constructor(codexPath: string, args: string[], env: Record<string, string>, stderrLog: string, onServerRequest?: ServerRequestHandler) {
+  // `env` overrides the inherited environment; an undefined value removes that variable.
+  constructor(codexPath: string, args: string[], env: Record<string, string | undefined>, stderrLog: string, onServerRequest?: ServerRequestHandler) {
     this.#log = createWriteStream(stderrLog, { flags: "a" });
     this.#onServerRequest = onServerRequest;
-    this.#child = spawn(codexPath, ["app-server", ...args], { env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+    for (const [name, value] of Object.entries(childEnv)) if (value === undefined) delete childEnv[name];
+    this.#child = spawn(codexPath, ["app-server", ...args], { env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.#child.stderr.pipe(this.#log);
     this.#exited = new Promise((resolve) => this.#child.on("exit", (code) => resolve(code)));
     this.#child.on("exit", (code) => {
