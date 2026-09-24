@@ -158,7 +158,7 @@ export function noProxyStatus(text: string): { managed: boolean; value: string |
 }
 
 // What the desktop app inherits: the user's variable overrides the machine's.
-function persistedEnv(name: string): string | null {
+export function persistedEnv(name: string): string | null {
   if (process.platform !== "win32") return null;
   for (const key of ["HKCU\\Environment", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"]) {
     try {
