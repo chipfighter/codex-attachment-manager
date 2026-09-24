@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir, requestStatsDirOf, selectionDirOf } from "./paths.ts";
-import { readSelection, writeSelection } from "./selection.ts";
+import { effectiveSelection, writeSelection } from "./selection.ts";
 import { buildIndex, imageData, readThreadHistory, type IndexedImage, type ThreadIndex } from "./thread-index.ts";
 import { pngThumbnail } from "./thumbnail.ts";
 
@@ -82,7 +82,7 @@ function load(threadId: string, options: PanelOptions) {
   const root = options.dataRoot ?? dataDir();
   const history = readThreadHistory(options.sessionsDir, threadId);
   const index = buildIndex(threadId, history);
-  const selection = readSelection(threadId, selectionDirOf(root));
+  const selection = effectiveSelection(threadId, options.sessionsDir, selectionDirOf(root));
   const statsFile = join(requestStatsDirOf(root), `${threadId}.json`);
   const lastRequest = existsSync(statsFile) ? JSON.parse(readFileSync(statsFile, "utf8")) : null;
   return { root, history, index, selection, lastRequest };

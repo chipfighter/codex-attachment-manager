@@ -132,6 +132,42 @@ export function buildIndex(threadId: string, history: Parsed[]): ThreadIndex {
   return { threadId, images, byKey, turns: turnNumbers.size };
 }
 
+// The first line alone (session_meta can be long), read in chunks without parsing the rest of the file.
+function firstLine(file: string): string {
+  const fd = openSync(file, "r");
+  try {
+    const chunks: Buffer[] = [];
+    const chunk = Buffer.alloc(64 * 1024);
+    for (let position = 0; ; position += chunk.length) {
+      const read = readSync(fd, chunk, 0, chunk.length, position);
+      if (read <= 0) break;
+      const end = chunk.subarray(0, read).indexOf(0x0a);
+      chunks.push(Buffer.from(chunk.subarray(0, end >= 0 ? end : read)));
+      if (end >= 0 || read < chunk.length) break;
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+const origins = new Map<string, { parent: string; at: string } | null>();
+
+// A forked thread's session_meta names the thread it came from and when it was forked. Cached: it never changes.
+export function forkOrigin(sessionsDir: string, threadId: string): { parent: string; at: string } | null {
+  if (origins.has(threadId)) return origins.get(threadId)!;
+  const first = allSegments(sessionsDir).segments.get(threadId);
+  // No rollout yet: do not cache, it may appear once the thread starts.
+  if (!first) return null;
+  let origin: { parent: string; at: string } | null = null;
+  try {
+    const meta = JSON.parse(firstLine(first));
+    if (meta.type === "session_meta" && meta.payload?.forked_from_id) origin = { parent: meta.payload.forked_from_id, at: meta.payload.timestamp ?? "" };
+  } catch { /* unreadable first line: treat as not a fork */ }
+  origins.set(threadId, origin);
+  return origin;
+}
+
 // The thread's model-visible history records, following paginated segments back through history_base.
 export function readThreadHistory(sessionsDir: string, threadId: string): Parsed[] {
   const { segments, threadOf } = allSegments(sessionsDir);
