@@ -1,10 +1,12 @@
 // Purpose: P1-2 — transparent local proxy between Codex and the ChatGPT backend. HTTP requests and WebSocket
 // upgrades are forwarded byte for byte; only metadata is logged (never auth headers or conversation content).
-// Input: [--port 17891]; the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
+// Input: [--port 17891] [--force-http] [--dump-requests (synthetic test threads only)]; the outbound proxy is taken
+// from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
 // Output: responses streamed back to Codex; one JSON line per request in local/proxy/<date>.jsonl.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -12,6 +14,11 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import zlib from "node:zlib";
+import { codexHome } from "./codexconfig.ts";
+import type { ImageRef } from "./images.ts";
+import { rewriteItems, type Described } from "./rewrite.ts";
+import { readSelection, selectionDir } from "./selection.ts";
+import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
 
 type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
@@ -118,11 +125,98 @@ function log(entry: Json): void {
   appendFileSync(join(localRoot, "proxy", `${new Date().toISOString().slice(0, 10)}.jsonl`), `${JSON.stringify(entry)}\n`);
 }
 
+// P2-1 debugging aid for synthetic test threads only: the request with every inline image reduced to its hash and size.
+export function redactImages(value: unknown, key = ""): unknown {
+  if (typeof value === "string") {
+    const inline = /^data:([^;,]+);base64,/.exec(value);
+    const raw = inline ? value.slice(inline[0].length) : key === "result" && value.length > 256 ? value : null;
+    if (raw === null) return value;
+    const digest = createHash("sha256").update(raw).digest("hex").slice(0, 16);
+    return `${inline ? `data:${inline[1]};base64,` : ""}<sha256:${digest} chars:${raw.length}>`;
+  }
+  if (Array.isArray(value)) return value.map((item) => redactImages(item));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([name, child]) => [name, redactImages(child, name)]));
+  return value;
+}
+
+function encodeBody(body: Buffer, encoding: string | undefined): Buffer {
+  if (encoding === "zstd") return zlib.zstdCompressSync(body);
+  if (encoding === "gzip") return zlib.gzipSync(body);
+  if (encoding === "br") return zlib.brotliCompressSync(body);
+  return body;
+}
+
+// Number tokens outside strings that JavaScript cannot represent exactly.
+export function hasUnsafeInteger(json: string): boolean {
+  for (const match of json.matchAll(/"(?:[^"\\]|\\.)*"|(?<![\d.eE+-])(-?\d+)(?![.\deE])/g)) {
+    if (match[1] && !Number.isSafeInteger(Number(match[1]))) return true;
+  }
+  return false;
+}
+
+export function hasUnchecked(threadId: string | null, dir = selectionDir): boolean {
+  if (!threadId) return false;
+  try { return Object.keys(readSelection(threadId, dir).unchecked).length > 0; } catch { return false; }
+}
+
+// P2: replace the thread's unchecked images with placeholders. Whenever the body cannot be handled safely it is
+// forwarded unchanged and the reason is logged; the report never contains conversation content.
+export function rewriteBody(original: Buffer, encoding: string | undefined, threadId: string, sessionsDir: string, dir = selectionDir): { body: Buffer; report: Json } {
+  const decoded = decodeBody(original, encoding);
+  if (!decoded) return { body: original, report: { skipped: "undecodable body" } };
+  const text = decoded.toString("utf8");
+  let json: Json;
+  try { json = JSON.parse(text); } catch { return { body: original, report: { skipped: "unparsable body" } }; }
+  if (!Array.isArray(json.input)) return { body: original, report: { skipped: "no input array" } };
+  if (hasUnsafeInteger(text)) return { body: original, report: { skipped: "integer beyond 2^53 would change when re-serialized" } };
+  let index: ThreadIndex;
+  try { index = loadThreadIndex(sessionsDir, threadId); } catch (error) { return { body: original, report: { skipped: `thread index: ${String(error)}` } }; }
+  const selection = readSelection(threadId, dir);
+  const describe = (ref: ImageRef): Described | undefined => {
+    const known = index.byKey.get(ref.key);
+    if (known) return known;
+    const stored = selection.unchecked[ref.key];
+    return stored ? { id: stored.id, name: ref.name, label: ref.label, kind: ref.kind, turn: null, width: ref.width, height: ref.height } : undefined;
+  };
+  const pixels = (ref: ImageRef) => index.byKey.get(ref.key)?.pixelSha256 ?? pixelHashOf(json.input, ref);
+  const { items, report } = rewriteItems(json.input, describe, new Set(Object.keys(selection.unchecked)), pixels);
+  const summary: Json = {
+    images: report.images,
+    replaced: report.replaced.map(({ key: _key, ...rest }) => rest),
+    locked: report.locked,
+    sentImageHashes: report.sentContentIds.map((id) => id.slice(0, 16)),
+    roundTripExact: JSON.stringify(json) === text,
+  };
+  if (!report.replaced.length) return { body: original, report: summary };
+  json.input = items;
+  const next = Buffer.from(JSON.stringify(json), "utf8");
+  const body = encodeBody(next, encoding);
+  return { body, report: { ...summary, decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
+}
+
 function main(): void {
   const portIndex = process.argv.indexOf("--port");
   const port = Number(portIndex >= 0 ? process.argv[portIndex + 1] : 17891);
+  // --force-http answers every Responses WebSocket upgrade with 426, Codex's own signal to use HTTP for the session.
+  const forceHttp = process.argv.includes("--force-http");
+  const dumpDir = process.argv.includes("--dump-requests") ? join(localRoot, "p2", "requests") : null;
+  const sessionsDir = join(codexHome(), "sessions");
   const via = outboundProxy();
   let sequence = 0;
+  // Open WebSocket connections per thread. Over WebSocket Codex only sends new items and the server keeps the rest,
+  // so a thread with unchecked images must move to HTTP: its idle connections are closed, and its next upgrade gets 426.
+  const live = new Map<string, Set<{ client: Duplex; socket: tls.TLSSocket; last: number; closedForSelection: boolean }>>();
+  setInterval(() => {
+    for (const [threadId, connections] of live) {
+      if (!hasUnchecked(threadId)) continue;
+      for (const connection of connections) {
+        if (Date.now() - connection.last < 1500) continue;
+        connection.closedForSelection = true;
+        connection.socket.destroy();
+        connection.client.destroy();
+      }
+    }
+  }, 500).unref();
 
   const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/__cam/health") {
@@ -133,23 +227,38 @@ function main(): void {
     const id = ++sequence;
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
+    const identity = requestIdentity(req.headers);
+    const rewrite = req.method === "POST" && /\/responses(\/compact)?$/.test(path) && hasUnchecked(identity.threadId);
     const chunks: Buffer[] = [];
     let requestBytes = 0;
     let responseBytes = 0;
     let status = 0;
     let finished = false;
+    let extra: Json = {};
+    const collect = () => req.on("data", (chunk: Buffer) => { chunks.push(chunk); requestBytes += chunk.length; });
     const finish = (error?: string) => {
       if (finished) return;
       finished = true;
       const body = Buffer.concat(chunks);
       const decoded = req.method === "POST" ? decodeBody(body, req.headers["content-encoding"] as string | undefined) : null;
       let details: Json = {};
-      if (decoded) { try { details = describeBody(path, JSON.parse(decoded.toString("utf8"))); } catch { details = { kind: "unparsed" }; } }
-      log({ at: new Date(started).toISOString(), id, transport: "http", method: req.method, path, status, requestBytes, decodedBytes: decoded?.length ?? null, contentEncoding: req.headers["content-encoding"] ?? null, responseBytes, ms: Date.now() - started, ...requestIdentity(req.headers), ...details, error: error ?? null });
+      if (decoded) {
+        try {
+          const json = JSON.parse(decoded.toString("utf8"));
+          details = describeBody(path, json);
+          if (dumpDir && /\/responses$/.test(path)) {
+            mkdirSync(dumpDir, { recursive: true });
+            const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^(x-codex|session_id|conversation_id|openai-beta|content-)/.test(name)));
+            writeFileSync(join(dumpDir, `${new Date(started).toISOString().replaceAll(":", "-")}-${id}.json`), JSON.stringify({ path, headers, body: redactImages(json) }, null, 2));
+          }
+        } catch { details = { kind: "unparsed" }; }
+      }
+      log({ at: new Date(started).toISOString(), id, transport: "http", method: req.method, path, status, requestBytes, decodedBytes: decoded?.length ?? null, contentEncoding: req.headers["content-encoding"] ?? null, responseBytes, ms: Date.now() - started, ...identity, ...details, ...extra, error: error ?? null });
     };
-    connectUpstream(via).then((socket) => {
+    // body === null streams the request through unchanged.
+    const send = (headers: Record<string, string | string[]>, body: Buffer | null) => connectUpstream(via).then((socket) => {
       // No `agent` option: with agent:false Node ignores createConnection and dials the host directly.
-      const upstream = http.request({ host: UPSTREAM_HOST, method: req.method, path: req.url, headers: forwardHeaders(req.headers), createConnection: () => socket }, (answer) => {
+      const upstream = http.request({ host: UPSTREAM_HOST, method: req.method, path: req.url, headers, createConnection: () => socket }, (answer) => {
         status = answer.statusCode ?? 0;
         const headers: Record<string, string | string[]> = {};
         for (const [name, value] of Object.entries(answer.headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) headers[name] = value;
@@ -162,22 +271,46 @@ function main(): void {
       upstream.on("error", (error) => { if (!res.headersSent) res.writeHead(502); res.end(); finish(String(error)); });
       // Codex may drop the connection mid-stream; still log the request once.
       res.on("close", () => finish(res.writableFinished ? undefined : "client closed before the response ended"));
-      req.on("data", (chunk: Buffer) => { chunks.push(chunk); requestBytes += chunk.length; });
-      req.pipe(upstream);
+      if (body) upstream.end(body);
+      else { collect(); req.pipe(upstream); }
     }, (error) => {
       res.writeHead(502, { "content-type": "text/plain" });
       res.end(`codex-attachment-manager proxy: cannot reach ${UPSTREAM_HOST}`);
       finish(String(error));
+    });
+    if (!rewrite) { send(forwardHeaders(req.headers), null); return; }
+    collect();
+    req.on("end", () => {
+      const original = Buffer.concat(chunks);
+      let out: { body: Buffer; report: Json };
+      try { out = rewriteBody(original, req.headers["content-encoding"] as string | undefined, identity.threadId!, sessionsDir); }
+      catch (error) { out = { body: original, report: { skipped: `rewrite failed: ${String(error)}` } }; }
+      extra = { rewrite: out.report };
+      const headers = forwardHeaders(req.headers);
+      headers["content-length"] = String(out.body.length);
+      send(headers, out.body);
     });
   };
 
   const onUpgrade = (req: http.IncomingMessage, client: Duplex, head: Buffer) => {
     const id = ++sequence;
     const started = Date.now();
+    const path = (req.url ?? "/").split("?")[0];
+    const identity = requestIdentity(req.headers);
+    if (/\/responses$/.test(path) && (forceHttp || hasUnchecked(identity.threadId))) {
+      client.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      log({ at: new Date(started).toISOString(), id, transport: "websocket", path, declined: 426, reason: forceHttp ? "--force-http" : "thread has unchecked images", ...identity });
+      return;
+    }
     let up = head.length;
     let down = 0;
     let upstreamStatus: string | null = null;
     connectUpstream(via).then((socket) => {
+      const connection = { client, socket, last: Date.now(), closedForSelection: false };
+      if (identity.threadId) {
+        if (!live.has(identity.threadId)) live.set(identity.threadId, new Set());
+        live.get(identity.threadId)!.add(connection);
+      }
       const lines = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i];
@@ -186,8 +319,8 @@ function main(): void {
       socket.write(`${lines.join("\r\n")}\r\n\r\n`);
       if (head.length) socket.write(head);
       socket.once("data", (chunk: Buffer) => { upstreamStatus = chunk.toString("latin1", 0, Math.min(chunk.length, 40)).split("\r\n")[0]; });
-      socket.on("data", (chunk: Buffer) => { down += chunk.length; });
-      client.on("data", (chunk: Buffer) => { up += chunk.length; });
+      socket.on("data", (chunk: Buffer) => { down += chunk.length; connection.last = Date.now(); });
+      client.on("data", (chunk: Buffer) => { up += chunk.length; connection.last = Date.now(); });
       socket.pipe(client);
       client.pipe(socket);
       let logged = false;
@@ -196,7 +329,8 @@ function main(): void {
         logged = true;
         socket.destroy();
         client.destroy();
-        log({ at: new Date(started).toISOString(), id, transport: "websocket", path: (req.url ?? "/").split("?")[0], upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, ...requestIdentity(req.headers) });
+        if (identity.threadId) live.get(identity.threadId)?.delete(connection);
+        log({ at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, ...identity });
       };
       socket.on("close", close);
       client.on("close", close);
