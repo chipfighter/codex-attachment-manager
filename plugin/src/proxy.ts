@@ -17,11 +17,11 @@ import net from "node:net";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { codexHome } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
+import { isEntryPoint } from "./entry.ts";
 import { dataDir, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
@@ -473,4 +473,4 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isEntryPoint(import.meta.url)) await main();

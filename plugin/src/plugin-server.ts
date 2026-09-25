@@ -11,9 +11,10 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { codexHome } from "./codexconfig.ts";
 import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
+import { isEntryPoint } from "./entry.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir } from "./paths.ts";
 
@@ -161,4 +162,4 @@ function main(): void {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isEntryPoint(import.meta.url)) main();

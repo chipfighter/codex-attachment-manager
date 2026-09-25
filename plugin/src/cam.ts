@@ -13,10 +13,10 @@ import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { findCodexCli, runCodex } from "./codexcli.ts";
 import { codexHome, MCP_BEGIN, noProxyStatus, persistedEnv, proxyStatus } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
+import { isEntryPoint } from "./entry.ts";
 import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, planUninstall, pluginStatus, type Plan } from "./install.ts";
 import { applySelection, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir, selectionDirOf } from "./paths.ts";
@@ -217,4 +217,4 @@ async function main(): Promise<void> {
   else throw new Error(`unknown command ${command}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isEntryPoint(import.meta.url)) await main();
