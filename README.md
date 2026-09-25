@@ -98,4 +98,4 @@ cam uninstall
 
 ## 许可证
 
-尚未确定。
+[MIT](LICENSE)
