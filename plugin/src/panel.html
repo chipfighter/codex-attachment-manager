@@ -14,7 +14,8 @@
   v0.1-8 — a panel opened on a new chat before its first message may stay tied to a thread Codex prepared and then
   replaced. v0.1-10: such a panel switches to the thread the user starts there (cam_bind): the page notes when it is on
   screen, and only a thread started meanwhile counts; when several did, the user picks one. v0.1-9: the title shows the
-  task's name.
+  task's name. v0.1-13: a notice when an earlier part of the history cannot be found (e.g. the task a fork came from
+  was deleted); the images left are listed as usual.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -659,6 +660,7 @@
       const tasks = newTasks();
       nodes.push(tasks.length > 1 ? chooser(tasks) : notice("info", "这个任务还没开始。发出第一条消息后，这里会自动切到这个任务。"));
     }
+    if (S.data?.historyMissing) nodes.push(notice("warn", "这个任务前面有一段历史找不到了（它所在的任务记录可能已被删除），那一段里的图片没法在这里列出。"));
     if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
     const sendNotice = S.data?.send?.notice;
     if (sendNotice?.kind === "skipped") nodes.push(notice("error", `上一次请求（${timeOf(sendNotice.at)}）没能按勾选替换，图片原样发给了模型。原因：${sendNotice.reason}。`));

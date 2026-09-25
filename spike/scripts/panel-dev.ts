@@ -5,7 +5,8 @@
 // (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
 // does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout;
-// with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once).
+// with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once;
+// ?thread=gap for a fork whose original task was deleted, v0.1-13).
 // The demo task has a name, as if the user had renamed it in Codex (v0.1-9).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
@@ -59,6 +60,12 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   turn("t3") + upload("msg_3", "t3", [["blue-circle-copy.png", blue], ["noise-1024.png", testImages.noise()]]) + say("收到。", "t3") +
   turn("t4") + upload("msg_4", "t4", [["settings-screenshot.png", screenshot]]) +
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4"));
+
+// ?thread=gap: a fork whose history starts in a page of a task that was deleted since.
+const GAP = `${THREAD.slice(0, -4)}0a90`;
+writeFileSync(join(day, `rollout-2026-09-24T11-00-00-${GAP}.jsonl`),
+  line("session_meta", { id: GAP, forked_from_id: "01a0d301-0000-7000-8000-00000000dead", history_base: { thread_id: "01a0d301-0000-7000-8000-00000000dead", end_byte_offset: 4096 } }) +
+  turn("g1") + upload("msg_g1", "g1", [["after-fork.png", sunset]]));
 
 // Its name, as Codex keeps it next to the sessions folder (the panel's title).
 writeFileSync(join(root, "session_index.jsonl"), `${JSON.stringify({ id: THREAD, thread_name: "海报配色调整", updated_at: "2026-09-24T10:00:00Z" })}
@@ -138,7 +145,8 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
   // Each page load gets a thread of its own, so a switch made on an earlier load does not carry over.
   const fresh = params.get("thread") === "fresh" ? Math.random().toString(16).slice(2, 6).padEnd(4, "0") : null;
-  const call = (name, args) => fetch("/call" + (fresh ? "?fresh=" + fresh : ""), { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
+  const query = fresh ? "?fresh=" + fresh : params.get("thread") === "gap" ? "?gap=1" : "";
+  const call = (name, args) => fetch("/call" + query, { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
   window.addEventListener("message", async (event) => {
     const m = event.data;
     if (!m || event.source !== frame.contentWindow) return;
@@ -199,7 +207,8 @@ createServer((request, response) => {
     request.on("end", () => {
       const { name, arguments: args } = JSON.parse(body);
       const freshId = `${THREAD.slice(0, -4)}${fresh}`;
-      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : meta;
+      const gap = new URL(request.url, "http://x").searchParams.has("gap");
+      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : gap ? { threadId: GAP, thread_id: GAP } : meta;
       try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, threadMeta, sessionsDir))); }
       catch (error) { reply(200, "application/json", JSON.stringify({ isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })); }
     });
