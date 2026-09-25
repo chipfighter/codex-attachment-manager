@@ -15,9 +15,12 @@
     - 问之前没描述过的细节时，回复“需要 IMG-001”，没有编造。
 - [ ] **v0.1-2 用户做多种情况的测试**【需用户】，同时完成 P5-5：确认插件从 Codex 的缓存启动。
 - [ ] **v0.1-3 升级时替换旧引擎**：装了新版本插件后，新的插件服务要能替换还在运行的旧引擎。现在要等旧引擎在 Codex 退出后自己退出。
-- [ ] **v0.1-4 macOS、Linux 适配**：
-  - 先查清各平台上 Codex 的形态：有没有桌面版，Codex 命令行和 Node 在哪里；
-  - 再改启动脚本、进程检测、数据目录和代理检测。
+- [x] **v0.1-4 macOS、Linux 适配**（用户 2026-09-25 定：这两个平台没法手测，先发布，由用户在 GitHub 上反馈；证据：CI 的冒烟测试在三个平台上通过）
+  - 查证：三个平台都有桌面版（Linux 版 2026-08 起预览，包名 `chatgpt`）；macOS 桌面版的命令行在 `<app>/Contents/Resources/codex`；Codex 自己的安装脚本放在 `~/.local/bin/codex`。Codex 启动插件服务时，Windows 上按 PATHEXT 解析命令，macOS、Linux 上直接运行，并在新进程组里启动。
+  - 一份 `.mcp.json` 通用：命令写 `./scripts/launch`，Windows 上找到 `launch.cmd`，macOS、Linux 上运行 POSIX 脚本 `scripts/launch`（和 OpenAI 自带插件的做法一致）。
+  - 引擎用 `ps` 检测 Codex 进程；macOS 读系统代理（`scutil --proxy`）；数据目录按平台惯例；找 Codex 命令行的位置按平台区分；根目录加 POSIX 版 `cam`。
+  - `spike/src/plugin-smoke.ts`：用 Codex 自己的命令行把插件装进临时目录，再由 app-server 开任务，确认插件服务起来、工具和面板都在、引擎启动；不用登录。本机桌面版的命令行（0.155.0-alpha）和 CI 上 npm 的命令行（0.157.0，三个平台）都通过，macOS、Linux 上装进缓存后启动脚本仍可执行。
+  - 没验证到的：macOS、Linux 桌面版里的面板显示，以及系统代理下 Codex 能否连到本机引擎，要等用户反馈。
 - [ ] **v0.1-5 更方便的安装**：用户不用打开 GitHub，就能把插件装进 Codex，并完成代理设置。
 - [ ] **v0.1-6 在 GitHub 上发布 v0.1**。
 - [x] **v0.1-7 许可证和 CI**（用户 2026-09-25 定：MIT，并加上 CI）：`LICENSE`（插件目录里也放一份）；`.github/workflows/ci.yml` 在 Windows、macOS、Linux 上跑单元测试；问题反馈模板，方便 macOS、Linux 用户在 GitHub 上报问题。
