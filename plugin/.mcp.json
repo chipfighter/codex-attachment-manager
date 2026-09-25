@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "codex_attachment_manager": {
-      "command": "cmd.exe",
-      "args": ["/d", "/s", "/c", "call", "./scripts/launch.cmd", "./src/plugin-server.ts"],
+      "command": "./scripts/launch",
+      "args": ["./src/plugin-server.ts"],
       "cwd": ".",
       "default_tools_approval_mode": "approve",
       "env_vars": [
@@ -11,6 +11,8 @@
         "CAM_ENGINE_PORT",
         "CODEX_MCP_NODE_PATH",
         "CODEX_BROWSER_USE_NODE_PATH",
+        "CODEX_ELECTRON_RESOURCES_PATH",
+        "CODEX_CLI_PATH",
         "HTTPS_PROXY",
         "HTTP_PROXY",
         "ALL_PROXY",
@@ -19,6 +21,9 @@
         "http_proxy",
         "all_proxy",
         "no_proxy",
+        "HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
         "USERPROFILE",
         "LOCALAPPDATA",
         "APPDATA",

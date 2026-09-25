@@ -1,7 +1,7 @@
 // Purpose: P3-2 — engine lifecycle: health identity, Codex process detection, auto-exit after consecutive misses,
 // one instance per port (a real engine is started on a spare port with its data in a temporary folder), and the
 // per-thread request statistics.
-// Input: synthetic tasklist output and a temporary data folder; output: Node test assertions only.
+// Input: synthetic tasklist and ps output and a temporary data folder; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, watchForCodex } from "../../plugin/src/engine.ts";
+import { countCodexInPs, countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, watchForCodex } from "../../plugin/src/engine.ts";
 import { readRequestStats, recordRequest } from "../../plugin/src/request-stats.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,13 @@ test("Codex processes are counted from tasklist CSV, in any Windows language", (
   assert.equal(countCodexProcesses("INFO: No tasks are running which match the specified criteria.\r\n"), 0);
   assert.equal(countCodexProcesses("信息: 没有运行的任务匹配指定标准。\r\n"), 0);
   assert.equal(countCodexProcesses('"ChatGPT.exe","23816","Console","1","200,000 K"\r\n'), 0);
+});
+
+test("on macOS and Linux, Codex processes are counted from ps by executable name", () => {
+  const mac = "/sbin/launchd\n/Applications/ChatGPT.app/Contents/MacOS/ChatGPT\n/Applications/ChatGPT.app/Contents/Resources/codex\n/Applications/ChatGPT.app/Contents/Frameworks/ChatGPT Helper.app/Contents/MacOS/ChatGPT Helper\n";
+  assert.equal(countCodexInPs(mac), 1);
+  assert.equal(countCodexInPs("systemd\nbash\ncodex\nnode\ncodex\ncodex-code-mode-host\n"), 2);
+  assert.equal(countCodexInPs("systemd\nbash\nnode\n"), 0);
 });
 
 test("the engine gives up only after consecutive checks without Codex", async () => {

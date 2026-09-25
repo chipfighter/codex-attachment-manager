@@ -5,7 +5,7 @@
 // WebSocket turn that kept running after images were unchecked (it cannot be rewritten).
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
-// the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the Windows proxy settings.
+// the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
 // Output: responses streamed back to Codex; <data dir>/proxy/<date>.jsonl; <data dir>/state/requests/<thread>.json.
 
 import { execFileSync } from "node:child_process";
@@ -31,12 +31,13 @@ type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade", "host"]);
 
-// Outbound proxy: environment first, then the Windows per-user setting; NO_PROXY is honoured for the upstream host.
-export function outboundProxy(env = process.env, windowsSetting = readWindowsProxy): { host: string; port: number } | null {
+// Outbound proxy: environment first, then the system setting (Windows per-user, macOS); NO_PROXY is honoured for the
+// upstream host.
+export function outboundProxy(env = process.env, systemSetting = readSystemProxy): { host: string; port: number } | null {
   const noProxy = (env.NO_PROXY ?? env.no_proxy ?? "").split(",").map((s) => s.trim().replace(/^\./, "")).filter(Boolean);
   if (noProxy.some((entry) => entry === "*" || UPSTREAM_HOST === entry || UPSTREAM_HOST.endsWith(`.${entry}`))) return null;
   const fromEnv = env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy;
-  let value = fromEnv || windowsSetting();
+  let value = fromEnv || systemSetting();
   if (!value) return null;
   // Windows may store per-protocol entries: "http=host:port;https=host:port".
   if (value.includes("=")) value = /https=([^;]+)/.exec(value)?.[1] ?? /http=([^;]+)/.exec(value)?.[1] ?? "";
@@ -45,15 +46,28 @@ export function outboundProxy(env = process.env, windowsSetting = readWindowsPro
   return { host: url.hostname, port: Number(url.port || 80) };
 }
 
-function readWindowsProxy(): string | null {
-  if (process.platform !== "win32") return null;
+function readSystemProxy(): string | null {
   try {
-    const out = execFileSync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"], { encoding: "utf8" });
-    if (!/ProxyEnable\s+REG_DWORD\s+0x1/.test(out)) return null;
-    return /ProxyServer\s+REG_SZ\s+(\S+)/.exec(out)?.[1] ?? null;
-  } catch {
-    return null;
+    if (process.platform === "win32") {
+      const out = execFileSync("reg", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"], { encoding: "utf8" });
+      if (!/ProxyEnable\s+REG_DWORD\s+0x1/.test(out)) return null;
+      return /ProxyServer\s+REG_SZ\s+(\S+)/.exec(out)?.[1] ?? null;
+    }
+    if (process.platform === "darwin") return macProxy(execFileSync("scutil", ["--proxy"], { encoding: "utf8" }));
+  } catch { /* no setting readable: connect directly */ }
+  return null;
+}
+
+// v0.1: `scutil --proxy` lists the macOS system proxies as "Key : value" lines. Only HTTP(S) proxies are usable here
+// (the engine tunnels with CONNECT); PAC files and SOCKS are not read. Linux has no system setting beyond the
+// environment.
+export function macProxy(scutil: string): string | null {
+  const field = (key: string) => new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)\\s*$`, "m").exec(scutil)?.[1] ?? null;
+  for (const scheme of ["HTTPS", "HTTP"]) {
+    const host = field(`${scheme}Proxy`);
+    if (field(`${scheme}Enable`) === "1" && host) return `${host}:${field(`${scheme}Port`) ?? "80"}`;
   }
+  return null;
 }
 
 function connectUpstream(via: { host: string; port: number } | null): Promise<tls.TLSSocket> {

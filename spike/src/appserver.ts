@@ -47,7 +47,9 @@ export class AppServer {
     this.#onServerRequest = onServerRequest;
     const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
     for (const [name, value] of Object.entries(childEnv)) if (value === undefined) delete childEnv[name];
-    this.#child = spawn(codexPath, ["app-server", ...args], { env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    // An npm-installed codex on Windows (as in CI) is a .cmd shim, which only cmd.exe can start.
+    const shim = /\.cmd$/i.test(codexPath);
+    this.#child = spawn(shim ? "cmd.exe" : codexPath, shim ? ["/d", "/s", "/c", codexPath, "app-server", ...args] : ["app-server", ...args], { env: childEnv, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.#child.stderr.pipe(this.#log);
     this.#exited = new Promise((resolve) => this.#child.on("exit", (code) => resolve(code)));
     this.#child.on("exit", (code) => {

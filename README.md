@@ -22,8 +22,9 @@
 
 ## 环境要求
 
-- Windows，Codex 桌面版（在 26.917 上验证过）。
-- 不需要另外安装 Node：插件使用 Codex 自带的 Node 24；找不到时，才用系统里的 `node`。
+- Windows：Codex 桌面版，在 26.917 上实测过。
+- macOS、Linux：CI 上验证过 Codex 能装上插件、启动插件服务和引擎，但还没有人在这两个平台的桌面版上实测过。遇到问题请在 GitHub 上提 issue。
+- 不需要另外安装 Node：插件使用 Codex 自带的 Node 24；找不到时，才用系统里 24 以上的 `node`。
 
 ## 安装
 

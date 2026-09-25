@@ -81,11 +81,17 @@ function codex(cli: string, args: string[]): string {
   return output;
 }
 
+// How Codex starts the plugin's MCP server (.mcp.json: ./scripts/launch in the plugin folder): on Windows it finds
+// launch.cmd, which only cmd.exe runs; on macOS and Linux it runs the shell script itself (so it must be executable).
+export const launcher = (script: string, platform: NodeJS.Platform = process.platform): [string, string[]] =>
+  platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", "call", "./scripts/launch.cmd", script]] : ["./scripts/launch", [script]];
+
 // Start the installed copy the way Codex will (its launcher, its folder) and ask it for its tools and its page.
 export function selfTest(dir: string, timeoutMs = 20_000): Promise<{ ok: boolean; tools: string[]; error: string | null }> {
   return new Promise((done) => {
     const scratch = mkdtempSync(join(tmpdir(), "cam-selftest-"));
-    const child = spawn("cmd.exe", ["/d", "/s", "/c", "call", "./scripts/launch.cmd", "./src/plugin-server.ts"], {
+    const [command, args] = launcher("./src/plugin-server.ts");
+    const child = spawn(command, args, {
       cwd: dir, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, CAM_NO_ENGINE: "1", CAM_DATA_DIR: scratch },
     });
@@ -148,7 +154,7 @@ async function main(): Promise<void> {
   if (command === "install") {
     if (!existsSync(join(repository, ".agents", "plugins", "marketplace.json"))) throw new Error("请在仓库里运行：node plugin/src/cam.ts install");
     const cli = findCodexCli();
-    if (!cli) throw new Error("找不到 Codex 的命令行（codex.exe）。请先安装 Codex 桌面版，并至少打开过一次。");
+    if (!cli) throw new Error("找不到 Codex 的命令行。请先安装 Codex 桌面版并至少打开过一次，或者安装 Codex 命令行；也可以用环境变量 CODEX_CLI_PATH 指定它的位置。");
     const env = { httpProxy: persistedEnv("HTTPS_PROXY") ?? persistedEnv("HTTP_PROXY") ?? persistedEnv("ALL_PROXY"), noProxy: persistedEnv("NO_PROXY") };
     // A conflict with the user's own settings stops everything before anything changes.
     planInstall({ configText: readConfig(), envText: readEnv(), env, port });
