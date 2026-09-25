@@ -69,6 +69,11 @@
   - 和任务里的图片数量、mp3 文件无关。
 - [x] **v0.1-13 原任务的记录被彻底删掉时，列出还能找到的图**（用户 2026-09-25 要求；`thread-index.ts`、`panel-state.ts`、`panel.html`；设计见 plan.md 第 15 节；证据：新增 2 个单元测试，面板开发页截图）
   - 以前这种情况面板只显示报错；现在列出剩下的图，并提示前面有一段历史找不到了。
+- [x] **v0.1-14 中英文界面**（用户 2026-09-25 定：先做简体中文和英文，其他语言等用户反馈；`language.ts`、`messages.ts`、`panel.html`、`rewrite.ts`；设计见 plan.md 第 16 节；证据：6 个单元测试，面板开发页的中英文截图，英文自测 `local/v01/placeholder-en-run1.json`、`placeholder-en-run2.json`，两次结果一致）
+  - 面板跟随 Codex 的界面语言；发给模型的说明也跟着换，中文原样不动；
+  - 插件页英文为主、附一段中文；标签页标题跟着语言；命令行按系统语言；
+  - 英文自测：模型不收回回答；被问到没说过的细节时回复“need IMG-001”，没有编造。
+  - 待用户重装后确认：Codex 会不会把界面语言告诉面板（`cam status` 看来源）。
 - [x] **v0.1-7 许可证和 CI**（用户 2026-09-25 定：MIT，并加上 CI）：`LICENSE`（插件目录里也放一份）；`.github/workflows/ci.yml` 在 Windows、macOS、Linux 上跑单元测试；问题反馈模板，方便 macOS、Linux 用户在 GitHub 上报问题。
 - 待定：Windows 上不先停用就移除插件，Codex 会断连，只能靠卸载命令恢复；要不要用计划任务让引擎不依赖插件启动，见 spec.md 第 5 节。
 

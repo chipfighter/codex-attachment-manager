@@ -28,7 +28,7 @@ export type SendInfo = {
   baseline: { at: string; bytes: number } | null;
   // What the engine sent for that request.
   last: { at: string; bytesBefore: number; bytesAfter: number; replaced: number; skipped: boolean } | null;
-  notice: { kind: "skipped"; at: string; reason: string } | { kind: "websocket"; at: string } | null;
+  notice: { kind: "skipped"; at: string; reason: SkipReason } | { kind: "websocket"; at: string } | null;
 };
 // started: the thread has a rollout. A panel opened on a new chat before its first message may be tied to a thread
 // Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
@@ -40,13 +40,14 @@ export type PanelState = {
   send: SendInfo;
 };
 
-// The engine's reasons for forwarding a request unchanged, in the user's words.
-const SKIP_REASONS: Array<[RegExp, string]> = [
-  [/^undecodable body/, "请求内容无法解压"],
-  [/^unparsable body/, "请求内容无法解析"],
-  [/^no input array/, "请求的格式和预期不同"],
-  [/^integer beyond/, "请求里有超大整数，改写会改变它的值"],
-  [/^thread index/, "读取这个任务的记录失败"],
+// The engine's reasons for forwarding a request unchanged, as codes the panel says in its language (v0.1-14).
+export type SkipReason = "undecodable" | "unparsable" | "format" | "integer" | "index" | "other";
+const SKIP_REASONS: Array<[RegExp, SkipReason]> = [
+  [/^undecodable body/, "undecodable"],
+  [/^unparsable body/, "unparsable"],
+  [/^no input array/, "format"],
+  [/^integer beyond/, "integer"],
+  [/^thread index/, "index"],
 ];
 
 export function sendInfo(stats: RequestStats | null): SendInfo {
@@ -57,7 +58,7 @@ export function sendInfo(stats: RequestStats | null): SendInfo {
   let notice: SendInfo["notice"] = null;
   if (latest?.transport === "websocket" && (latest.event === "active-while-unchecked" || latest.activeWhileUnchecked)) notice = { kind: "websocket", at: latest.at };
   else if (latest?.transport === "http" && rewrite?.skipped) {
-    notice = { kind: "skipped", at: http!.at, reason: SKIP_REASONS.find(([pattern]) => pattern.test(rewrite.skipped))?.[1] ?? "改写时出错" };
+    notice = { kind: "skipped", at: http!.at, reason: SKIP_REASONS.find(([pattern]) => pattern.test(rewrite.skipped))?.[1] ?? "other" };
   }
   return {
     baseline: http && bytes !== null && http.imageSizes ? { at: http.at, bytes } : null,
@@ -67,10 +68,11 @@ export function sendInfo(stats: RequestStats | null): SendInfo {
 }
 export type PanelOptions = { sessionsDir: string; dataRoot?: string };
 
-// "需要 IMG-004" or a list right after it ("需要 IMG-004、IMG-002 和 IMG-007"); a full stop ends the list.
+// "需要 IMG-004" or a list right after it ("需要 IMG-004、IMG-002 和 IMG-007"); a full stop ends the list. The English
+// wording (v0.1-14) asks for "need IMG-004", which the model may quote.
 const ASKED = [
   /需要((?:\s*[“"'「]?\s*IMG-\d{3,}\s*[”"'」]?\s*(?:[、，,/]|以及|和|与|及)?)+)/g,
-  /\bneeds?((?:\s*IMG-\d{3,}\s*(?:,|and)?)+)/gi,
+  /\bneeds?((?:\s*["'“”‘’]?\s*IMG-\d{3,}\s*["'“”‘’]?\s*(?:,|and)?)+)/gi,
 ];
 
 // Ids the model asked for ("需要 IMG-003") in its latest reply; a turn still running falls back to the one before.

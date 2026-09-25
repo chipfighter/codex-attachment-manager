@@ -5,6 +5,7 @@
 // WebSocket turn that kept running after images were unchecked (it cannot be rewritten).
 // v0.1-3: reports its build and version; POST /__cam/retire hands the port to a newer engine (see engine.ts).
 // v0.1-11: pixel fingerprints go to the shared cache in the data directory, for the panels to reuse.
+// v0.1-14: the text for the model is in the language the panel last reported (Codex's interface language).
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
@@ -23,6 +24,7 @@ import { codexHome } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
 import { isEntryPoint } from "./entry.ts";
+import { currentLang } from "./language.ts";
 import { dataDir, pixelCacheDirOf, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
@@ -208,7 +210,7 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
     return stored ? { id: stored.id, name: ref.name, label: ref.label, kind: ref.kind, turn: null, width: ref.width, height: ref.height } : undefined;
   };
   const pixels = (ref: ImageRef) => index.byKey.get(ref.key)?.pixelSha256 ?? pixelHashOf(json.input, ref);
-  const { items, report } = rewriteItems(json.input, describe, new Set(Object.keys(selection.unchecked)), pixels);
+  const { items, report } = rewriteItems(json.input, describe, new Set(Object.keys(selection.unchecked)), pixels, currentLang());
   const summary: Json = {
     images: report.images,
     replaced: report.replaced.map(({ key: _key, ...rest }) => rest),

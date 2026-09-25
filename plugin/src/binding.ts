@@ -57,7 +57,7 @@ export function boundThread(threadId: string, dir = bindingsDirOf()): string | n
 }
 
 export function bindThread(threadId: string, target: string, dir = bindingsDirOf()): void {
-  if (!THREAD_ID.test(threadId) || !THREAD_ID.test(target)) throw new Error("不是任务编号");
+  if (!THREAD_ID.test(threadId) || !THREAD_ID.test(target)) throw new Error("not a thread id");
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${threadId}.json`);
   writeFileSync(`${file}.tmp`, JSON.stringify({ threadId: target, at: new Date().toISOString() }));

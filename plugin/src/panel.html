@@ -16,6 +16,8 @@
   screen, and only a thread started meanwhile counts; when several did, the user picks one. v0.1-9: the title shows the
   task's name. v0.1-13: a notice when an earlier part of the history cannot be found (e.g. the task a fork came from
   was deleted); the images left are listed as usual.
+  v0.1-14: Simplified Chinese or English, following Codex's interface language (the host context's locale; else the
+  system's). Every call tells the plugin the language, so its answers match and the text for the model follows it.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -219,17 +221,231 @@
   <div class="viewer-stage" id="viewerStage"></div>
   <div class="viewer-bottom">
     <span class="meta" id="viewerMeta"></span>
-    <label class="check" id="viewerCheck"><input type="checkbox"><span class="box"></span><span>发送这张图</span></label>
+    <label class="check" id="viewerCheck"><input type="checkbox"><span class="box"></span><span class="label">发送这张图</span></label>
   </div>
 </div>
+<!-- The panel's words (v0.1-14): Simplified Chinese and English, the same keys in both (a unit test checks it);
+  "key_one" is the English text for a count of one. -->
+<script type="application/json" id="messages">
+  {
+    "zh": {
+      "page.title": "上下文素材",
+      "title.loading": "上下文素材",
+      "title.newTask": "新任务",
+      "title.unnamed": "未命名任务",
+      "refresh": "刷新",
+      "refresh.at": "刷新（上次更新 {time}）",
+      "refresh.stale": "刷新（有一会儿没更新了；上次更新 {time}）",
+      "plugin.disable": "停用插件",
+      "plugin.enable": "启用插件",
+      "plan.loading": "正在读取…",
+      "plan.failed": "读取失败",
+      "plan.empty": "还没有图片",
+      "plan.next": "下一条消息：发送 {sent} 张",
+      "plan.dropped": " · 占位 {dropped} 张",
+      "plan.duplicates": "（其中重复 {duplicates} 张）",
+      "plan.gone": " · {gone} 张已不在上下文",
+      "meter.request": "预计请求",
+      "meter.images": "预计图片数据",
+      "meter.full": "全部发送 {full} · 省 {percent}%",
+      "meter.none": "未取消任何图",
+      "last.noBaseline": "还没有记录到经过代理的完整请求，先按图片大小估算",
+      "last.skipped": "上一次请求 {time}：没能替换，原样发出 {bytes}",
+      "last.replaced": "上一次请求 {time}：替换了 {count} 张，少发 {saved}，实际发出 {after}",
+      "last.none": "上一次请求 {time}：没有替换，发出 {bytes}",
+      "kind.upload": "用户上传",
+      "kind.view": "查看的图片",
+      "kind.generated": "生成的图片",
+      "kind.tool": "工具返回",
+      "tag.locked": "无法取消",
+      "tag.gone": "已不在上下文",
+      "tag.requested": "模型需要这张",
+      "tag.replacedBy": "由 {id} 代替",
+      "tag.notSent": "不发送",
+      "tag.sameAs": "与 {id} 相同",
+      "turn.n": "第 {n} 轮",
+      "turn.earlier": "更早",
+      "row.unnamed": "未命名",
+      "row.preview": "预览 {id}",
+      "row.send": "发送 {id}",
+      "thumb.none": "无预览",
+      "empty.title": "这个任务里还没有图片",
+      "empty.text": "上传、查看或生成的图片会按时间顺序出现在这里。",
+      "notice.retry": "重试",
+      "notice.enabled": "已启用。重启 Codex 后生效，取消勾选的图就不再发送了。",
+      "notice.disabled": "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。",
+      "notice.notEnabled": "插件没有启用：Codex 现在直连，取消勾选不会生效。点右上角的“启用插件”，然后重启 Codex。",
+      "notice.waiting": "这个任务还没开始。发出第一条消息后，这里会自动切到这个任务。",
+      "notice.historyMissing": "这个任务前面有一段历史找不到了（它所在的任务记录可能已被删除），那一段里的图片没法在这里列出。",
+      "notice.engineDown": "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。",
+      "notice.skipped": "上一次请求（{time}）没能按勾选替换，图片原样发给了模型。原因：{reason}。",
+      "notice.websocket": "取消勾选时这一轮对话还在进行，这一轮剩下的请求仍带着原图；从下一条消息起生效。",
+      "reason.undecodable": "请求内容无法解压",
+      "reason.unparsable": "请求内容无法解析",
+      "reason.format": "请求的格式和预期不同",
+      "reason.integer": "请求里有超大整数，改写会改变它的值",
+      "reason.index": "读取这个任务的记录失败",
+      "reason.other": "改写时出错",
+      "chooser.title": "刚刚开始了好几个任务，这个面板要显示哪一个？",
+      "chooser.untitled": "新任务",
+      "footer.saving": "正在保存…",
+      "footer.pending": "有 {count} 处改动，点“确定”后生效",
+      "footer.saved": "已保存，从下一条消息开始生效",
+      "footer.hint": "勾选的图片会随下一条消息发给模型",
+      "button.undo": "撤销",
+      "button.confirm": "确定",
+      "viewer.label": "图片预览",
+      "viewer.close": "关闭预览",
+      "viewer.closeTitle": "关闭（Esc）",
+      "viewer.send": "发送这张图",
+      "viewer.loading": "正在加载…",
+      "viewer.none": "这张图无法预览",
+      "error.load": "读取失败：{message}",
+      "error.save": "保存失败：{message}",
+      "error.switch": "切换失败：{message}",
+      "error.enable": "启用失败：{message}",
+      "error.disable": "停用失败：{message}",
+      "error.noReply": "Codex 没有响应",
+      "error.call": "调用失败"
+    },
+    "en": {
+      "page.title": "Context Assets",
+      "title.loading": "Context Assets",
+      "title.newTask": "New task",
+      "title.unnamed": "Untitled task",
+      "refresh": "Refresh",
+      "refresh.at": "Refresh (last updated {time})",
+      "refresh.stale": "Refresh (not updated for a while; last updated {time})",
+      "plugin.disable": "Disable plugin",
+      "plugin.enable": "Enable plugin",
+      "plan.loading": "Loading…",
+      "plan.failed": "Could not load",
+      "plan.empty": "No images yet",
+      "plan.next": "Next message sends {sent} images",
+      "plan.next_one": "Next message sends {sent} image",
+      "plan.dropped": " · {dropped} as placeholders",
+      "plan.dropped_one": " · {dropped} as a placeholder",
+      "plan.duplicates": " ({duplicates} of them duplicates)",
+      "plan.duplicates_one": " ({duplicates} of them a duplicate)",
+      "plan.gone": " · {gone} no longer in context",
+      "meter.request": "Estimated request",
+      "meter.images": "Estimated image data",
+      "meter.full": "All images {full} · {percent}% saved",
+      "meter.none": "Nothing unchecked",
+      "last.noBaseline": "No full request through the proxy recorded yet; estimated from the image sizes",
+      "last.skipped": "Last request {time}: not rewritten, sent as it was ({bytes})",
+      "last.replaced": "Last request {time}: {count} images replaced, {saved} less, {after} sent",
+      "last.replaced_one": "Last request {time}: {count} image replaced, {saved} less, {after} sent",
+      "last.none": "Last request {time}: nothing replaced, {bytes} sent",
+      "kind.upload": "Uploaded",
+      "kind.view": "Viewed",
+      "kind.generated": "Generated",
+      "kind.tool": "Tool result",
+      "tag.locked": "Can't uncheck",
+      "tag.gone": "No longer in context",
+      "tag.requested": "The model needs this",
+      "tag.replacedBy": "Replaced by {id}",
+      "tag.notSent": "Not sent",
+      "tag.sameAs": "Same as {id}",
+      "turn.n": "Turn {n}",
+      "turn.earlier": "Earlier",
+      "row.unnamed": "Unnamed",
+      "row.preview": "Preview {id}",
+      "row.send": "Send {id}",
+      "thumb.none": "No preview",
+      "empty.title": "No images in this task yet",
+      "empty.text": "Images you upload, and images the model views or generates, show up here in order.",
+      "notice.retry": "Retry",
+      "notice.enabled": "Enabled. After you restart Codex, unchecked images are no longer sent.",
+      "notice.disabled": "Disabled. After you restart Codex it connects directly, and unchecking has no effect. To uninstall, you can now remove the plugin on the plugins page.",
+      "notice.notEnabled": "The plugin is not enabled: Codex connects directly, so unchecking has no effect. Click \"Enable plugin\" at the top right, then restart Codex.",
+      "notice.waiting": "This task has not started yet. Once you send the first message, the panel switches to it.",
+      "notice.historyMissing": "An earlier part of this task's history cannot be found (the task it came from may have been deleted), so the images from that part are not listed here.",
+      "notice.engineDown": "The proxy is not running, so unchecking has no effect for now. Closing and reopening Codex usually brings it back.",
+      "notice.skipped": "The last request ({time}) could not be rewritten as selected; the images went to the model as they were. Reason: {reason}.",
+      "notice.websocket": "This turn was still running when you unchecked images, so its remaining requests still carry the originals; the change applies from the next message.",
+      "reason.undecodable": "the request could not be decompressed",
+      "reason.unparsable": "the request could not be parsed",
+      "reason.format": "the request is not in the expected format",
+      "reason.integer": "the request holds an integer too large to rewrite safely",
+      "reason.index": "this task's records could not be read",
+      "reason.other": "an error occurred while rewriting",
+      "chooser.title": "Several tasks just started. Which one should this panel show?",
+      "chooser.untitled": "New task",
+      "footer.saving": "Saving…",
+      "footer.pending": "{count} changes; click \"Confirm\" to apply them",
+      "footer.pending_one": "{count} change; click \"Confirm\" to apply it",
+      "footer.saved": "Saved; applies from the next message",
+      "footer.hint": "Checked images go to the model with the next message",
+      "button.undo": "Undo",
+      "button.confirm": "Confirm",
+      "viewer.label": "Image preview",
+      "viewer.close": "Close preview",
+      "viewer.closeTitle": "Close (Esc)",
+      "viewer.send": "Send this image",
+      "viewer.loading": "Loading…",
+      "viewer.none": "This image cannot be previewed",
+      "error.load": "Could not load: {message}",
+      "error.save": "Could not save: {message}",
+      "error.switch": "Could not switch: {message}",
+      "error.enable": "Could not enable: {message}",
+      "error.disable": "Could not disable: {message}",
+      "error.noReply": "Codex did not respond",
+      "error.call": "The call failed"
+    }
+  }
+</script>
 <script>
 (() => {
-  const KIND = { upload: "用户上传", view: "查看的图片", generated: "生成的图片", tool: "工具返回" };
   const THUMB_SIDE = 160;
   const POLL_MS = 3000;
   const STALE_MS = 30000;          // older than this, the 刷新 button turns orange
   const $ = (id) => document.getElementById(id);
   const main = $("main");
+
+  // ---- language (v0.1-14): Codex's interface language when the host context gives one, else the system's ----
+  const MESSAGES = JSON.parse($("messages").textContent);
+  const langOf = (tag) => (typeof tag === "string" && tag.trim() ? (tag.trim().toLowerCase().startsWith("zh") ? "zh" : "en") : null);
+  let lang = langOf(navigator.language) ?? "en";
+  let langSource = "system";
+  const template = (key, count) => {
+    const table = MESSAGES[lang];
+    return (count === 1 && table[`${key}_one`]) || table[key] || MESSAGES.en[key] || key;
+  };
+  const fill = (text, vars) => text.replace(/\{(\w+)\}/g, (all, name) => (name in vars ? String(vars[name]) : all));
+  const t = (key, vars = {}) => fill(template(key, vars.count), vars);
+  // A text with some of its values in bold, e.g. the number of images the next message sends.
+  function rich(key, vars, bold) {
+    return template(key, vars.count).split(/(\{\w+\})/).filter(Boolean).map((part) => {
+      const name = /^\{(\w+)\}$/.exec(part)?.[1];
+      if (!name || !(name in vars)) return part;
+      return name === bold ? Object.assign(document.createElement("b"), { textContent: String(vars[name]) }) : String(vars[name]);
+    });
+  }
+  function setLanguage(tag, source) {
+    const next = langOf(tag);
+    if (!next) return;
+    const changed = next !== lang;
+    lang = next;
+    langSource = source;
+    if (changed) applyLanguage();
+  }
+  // The texts outside what render() draws, and the caches that hold words.
+  function applyLanguage() {
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    document.title = t("page.title");
+    $("refresh").setAttribute("aria-label", t("refresh"));
+    $("undo").textContent = t("button.undo");
+    $("confirm").textContent = t("button.confirm");
+    $("viewer").setAttribute("aria-label", t("viewer.label"));
+    $("viewerClose").setAttribute("aria-label", t("viewer.close"));
+    $("viewerClose").title = t("viewer.closeTitle");
+    $("viewerCheck").querySelector(".label").textContent = t("viewer.send");
+    emptyState.querySelector("strong").textContent = t("empty.title");
+    emptyState.querySelector("span").textContent = t("empty.text");
+    turnLabels.clear();
+    render();
+  }
 
   // ---- MCP Apps bridge (JSON-RPC over postMessage with Codex) ----
   let nextId = 1;
@@ -238,15 +454,17 @@
   function request(method, params, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const id = nextId++;
-      const timer = setTimeout(() => { waiting.delete(id); reject(new Error("Codex 没有响应")); }, timeoutMs);
+      const timer = setTimeout(() => { waiting.delete(id); reject(new Error(t("error.noReply"))); }, timeoutMs);
       waiting.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } });
       post({ id, method, params });
     });
   }
   const textOf = (result) => (result?.content ?? []).map((part) => part?.text).filter(Boolean).join("\n");
+  // Every call says which language the panel shows, so the plugin answers in it; the panel's reads also say where the
+  // language came from, and the plugin remembers it for the text it gives the model.
   async function callTool(name, args) {
-    const result = await request("tools/call", { name, arguments: args ?? {} });
-    if (result?.isError) throw new Error(textOf(result) || "调用失败");
+    const result = await request("tools/call", { name, arguments: { ...(args ?? {}), lang, ...(name === "cam_panel" ? { langSource } : {}) } });
+    if (result?.isError) throw new Error(textOf(result) || t("error.call"));
     return result;
   }
   window.addEventListener("message", (event) => {
@@ -255,7 +473,7 @@
     if (message.id !== undefined && waiting.has(message.id) && ("result" in message || "error" in message)) {
       const waiter = waiting.get(message.id);
       waiting.delete(message.id);
-      if (message.error) waiter.reject(new Error(message.error.message ?? "调用失败")); else waiter.resolve(message.result);
+      if (message.error) waiter.reject(new Error(message.error.message ?? t("error.call"))); else waiter.resolve(message.result);
       return;
     }
     if (message.method === "ui/notifications/tool-result") ingest(message.params?.structuredContent);
@@ -264,6 +482,7 @@
   });
   function applyHost(context) {
     if (!context) return;
+    if (typeof context.locale === "string") setLanguage(context.locale, "codex");
     if (context.theme === "dark" || context.theme === "light") document.documentElement.dataset.theme = context.theme;
     const variables = context.styles?.variables;
     if (variables && typeof variables === "object") {
@@ -273,7 +492,9 @@
 
   // ---- state ----
   const S = {
-    data: null, threadId: null, error: null, flash: null,
+    data: null, threadId: null,
+    error: null,                   // { key, message }: said in the current language when drawn
+    flash: null,                   // a text key
     pending: new Map(),            // id -> checked, changes not confirmed yet
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
@@ -322,7 +543,7 @@
     renderRefresh();
     noteScreen();
     try { ingest((await callTool("cam_panel", { shown })).structuredContent); followNewTask(); }
-    catch (error) { S.error = "读取失败：" + error.message; render(); }
+    catch (error) { S.error = { key: "error.load", message: error.message }; render(); }
     finally { S.refreshing = false; S.manual = false; renderRefresh(); }
   }
   // Moving to or touching the panel brings it up to date at once, whatever the host does to a background frame's
@@ -352,11 +573,11 @@
         check: changes.filter(([, checked]) => checked).map(([id]) => id),
       });
       S.pending.clear();
-      S.flash = "已保存，从下一条消息开始生效";
+      S.flash = "footer.saved";
       setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
       ingest(result.structuredContent);
     } catch (error) {
-      S.error = "保存失败：" + error.message;
+      S.error = { key: "error.save", message: error.message };
     } finally {
       S.saving = false; render();
     }
@@ -386,7 +607,7 @@
     if (S.switchingTask) return;
     S.switchingTask = true; render();
     try { ingest((await callTool("cam_bind", { target: threadId })).structuredContent); }
-    catch (error) { S.error = "切换失败：" + error.message; }
+    catch (error) { S.error = { key: "error.switch", message: error.message }; }
     finally { S.switchingTask = false; render(); }
   }
 
@@ -398,7 +619,7 @@
       const result = await callTool("cam_setup", { enable });
       ingest(result.structuredContent);
     } catch (error) {
-      S.error = (enable ? "启用失败：" : "停用失败：") + error.message;
+      S.error = { key: enable ? "error.enable" : "error.disable", message: error.message };
     } finally {
       S.switching = false; render();
     }
@@ -439,23 +660,23 @@
   const turnLabels = new Map();
   const emptyState = document.createElement("div");
   emptyState.className = "empty";
-  emptyState.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="2.5"/><path d="M7 3h10.5A3.5 3.5 0 0 1 21 6.5V16"/><circle cx="8" cy="11" r="1.5"/><path d="m3.5 18 4.5-4.5 3 3 2-2 3.5 3.5"/></svg><strong>这个任务里还没有图片</strong><span>上传、查看或生成的图片会按时间顺序出现在这里。</span>';
+  emptyState.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="2.5"/><path d="M7 3h10.5A3.5 3.5 0 0 1 21 6.5V16"/><circle cx="8" cy="11" r="1.5"/><path d="m3.5 18 4.5-4.5 3 3 2-2 3.5 3.5"/></svg><strong></strong><span></span>';
   const formatBytes = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  const describe = (image) => [KIND[image.kind] ?? image.kind, image.width && image.height ? `${image.width}×${image.height}` : null, formatBytes(image.bytes)].filter(Boolean).join(" · ");
+  const describe = (image) => [MESSAGES[lang][`kind.${image.kind}`] ? t(`kind.${image.kind}`) : image.kind, image.width && image.height ? `${image.width}×${image.height}` : null, formatBytes(image.bytes)].filter(Boolean).join(" · ");
 
   // An unchecked image becomes a duplicate placeholder when a copy of the same content is still sent in that request.
   const sentCopyOf = (image) => image.sameAs.find((id) => { const other = byId(id); return other && other.inNextRequest && isChecked(other); });
 
   function tagsOf(image) {
     const tags = [];
-    if (!image.replaceable) tags.push(["无法取消", ""]);
+    if (!image.replaceable) tags.push([t("tag.locked"), ""]);
     // Compacted out of the history: it is not sent either way.
-    if (!image.inNextRequest) { tags.push(["已不在上下文", ""]); return tags; }
+    if (!image.inNextRequest) { tags.push([t("tag.gone"), ""]); return tags; }
     const checked = isChecked(image);
     const sentCopy = sentCopyOf(image);
-    if (!checked && image.requested) tags.push(["模型需要这张", "warn"]);
-    if (!checked) tags.push([sentCopy ? `由 ${sentCopy} 代替` : "不发送", ""]);
-    else if (image.sameAs.length) tags.push([`与 ${image.sameAs[0]} 相同`, ""]);
+    if (!checked && image.requested) tags.push([t("tag.requested"), "warn"]);
+    if (!checked) tags.push([sentCopy ? t("tag.replacedBy", { id: sentCopy }) : t("tag.notSent"), ""]);
+    else if (image.sameAs.length) tags.push([t("tag.sameAs", { id: image.sameAs[0] }), ""]);
     return tags;
   }
 
@@ -478,12 +699,13 @@
     const pad = (n) => String(n).padStart(2, "0");
     return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
+  // Today: 10:30; another day: 9月25日 10:30 or Sep 25, 10:30.
   function timeOf(at) {
     const date = new Date(at);
     if (Number.isNaN(date.getTime())) return "";
-    const pad = (n) => String(n).padStart(2, "0");
-    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    return date.toDateString() === new Date().toDateString() ? time : `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+    const today = date.toDateString() === new Date().toDateString();
+    const time = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+    return new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", today ? time : { month: lang === "zh" ? "long" : "short", day: "numeric", ...time }).format(date);
   }
 
   function makeRow(id) {
@@ -506,7 +728,7 @@
       if (!img) { img = document.createElement("img"); img.alt = ""; button.replaceChildren(img); }
       if (img.src !== url) img.src = url;
     } else if (S.thumbs.has(id)) {
-      button.innerHTML = '<span class="none">无预览</span>';
+      button.replaceChildren(Object.assign(document.createElement("span"), { className: "none", textContent: t("thumb.none") }));
     }
   }
 
@@ -514,14 +736,14 @@
     const checked = isChecked(image);
     row.classList.toggle("off", !checked);
     row.classList.toggle("pending", S.pending.has(image.id));
-    row.querySelector(".thumb").setAttribute("aria-label", `预览 ${image.id}`);
+    row.querySelector(".thumb").setAttribute("aria-label", t("row.preview", { id: image.id }));
     row.querySelector(".id").textContent = image.id;
-    row.querySelector(".name").textContent = image.name ?? "未命名";
+    row.querySelector(".name").textContent = image.name ?? t("row.unnamed");
     row.querySelector(".meta").textContent = describe(image);
     const input = row.querySelector("input");
     input.checked = checked;
     input.disabled = !image.replaceable || S.saving;
-    input.setAttribute("aria-label", `发送 ${image.id}`);
+    input.setAttribute("aria-label", t("row.send", { id: image.id }));
     row.querySelector(".check").classList.toggle("locked", !image.replaceable);
     const tags = row.querySelector(".tags");
     tags.replaceChildren(...tagsOf(image).map(([text, tone]) => {
@@ -536,36 +758,35 @@
   function renderHeader() {
     const list = images();
     const plan = $("plan");
-    const title = !S.data ? "上下文素材" : S.data.title ?? (S.data.started === false ? "新任务" : "未命名任务");
+    const title = !S.data ? t("title.loading") : S.data.title ?? (S.data.started === false ? t("title.newTask") : t("title.unnamed"));
     $("title").textContent = title;
     $("title").title = title;
     $("count").textContent = list.length ? String(list.length) : "";
     if (!S.data || !list.length) {
-      plan.textContent = !S.data ? (S.error ? "读取失败" : "正在读取…") : "还没有图片";
+      plan.textContent = !S.data ? (S.error ? t("plan.failed") : t("plan.loading")) : t("plan.empty");
       $("meter").hidden = true;
       $("last").textContent = "";
       return;
     }
     const f = forecast();
-    const bold = (text) => Object.assign(document.createElement("b"), { textContent: String(text) });
     plan.replaceChildren(
-      "下一条消息：发送 ", bold(f.sent), " 张",
-      f.dropped ? ` · 占位 ${f.dropped} 张${f.duplicates ? `（其中重复 ${f.duplicates} 张）` : ""}` : "",
-      f.gone ? ` · ${f.gone} 张已不在上下文` : "",
+      ...rich("plan.next", { sent: f.sent, count: f.sent }, "sent"),
+      f.dropped ? t("plan.dropped", { dropped: f.dropped, count: f.dropped }) + (f.duplicates ? t("plan.duplicates", { duplicates: f.duplicates, count: f.duplicates }) : "") : "",
+      f.gone ? t("plan.gone", { gone: f.gone, count: f.gone }) : "",
     );
     $("meter").hidden = false;
-    $("meterLabel").textContent = f.whole ? "预计请求" : "预计图片数据";
+    $("meterLabel").textContent = t(f.whole ? "meter.request" : "meter.images");
     $("meterValue").textContent = formatBytes(f.after);
     const saving = f.after < f.full;
     const percent = (1 - f.after / f.full) * 100;
-    $("meterFull").textContent = saving ? `全部发送 ${formatBytes(f.full)} · 省 ${percent < 1 ? "<1" : Math.round(percent)}%` : "未取消任何图";
+    $("meterFull").textContent = saving ? t("meter.full", { full: formatBytes(f.full), percent: percent < 1 ? "<1" : Math.round(percent) }) : t("meter.none");
     $("meterFull").classList.toggle("saved", saving);
     $("meterBar").style.width = `${f.full > 0 ? Math.max(2, Math.round((f.after / f.full) * 100)) : 100}%`;
     const last = S.data.send?.last;
-    $("last").textContent = !last ? (f.whole ? "" : "还没有记录到经过代理的完整请求，先按图片大小估算")
-      : last.skipped ? `上一次请求 ${timeOf(last.at)}：没能替换，原样发出 ${formatBytes(last.bytesBefore)}`
-      : last.replaced ? `上一次请求 ${timeOf(last.at)}：替换了 ${last.replaced} 张，少发 ${formatBytes(last.bytesBefore - last.bytesAfter)}，实际发出 ${formatBytes(last.bytesAfter)}`
-      : `上一次请求 ${timeOf(last.at)}：没有替换，发出 ${formatBytes(last.bytesBefore)}`;
+    $("last").textContent = !last ? (f.whole ? "" : t("last.noBaseline"))
+      : last.skipped ? t("last.skipped", { time: timeOf(last.at), bytes: formatBytes(last.bytesBefore) })
+      : last.replaced ? t("last.replaced", { time: timeOf(last.at), count: last.replaced, saved: formatBytes(last.bytesBefore - last.bytesAfter), after: formatBytes(last.bytesAfter) })
+      : t("last.none", { time: timeOf(last.at), bytes: formatBytes(last.bytesBefore) });
   }
 
   // Notices are reused while their text stays the same, so re-rendering does not move the list around.
@@ -592,19 +813,19 @@
 
   // Several threads started since the panel was opened: which one is this panel's?
   function chooser(tasks) {
-    const key = `chooser|${tasks.map((task) => `${task.threadId}:${task.title ?? ""}`).join("|")}`;
+    const key = `chooser|${lang}|${tasks.map((task) => `${task.threadId}:${task.title ?? ""}`).join("|")}`;
     let box = notices.get(key);
     if (!box) {
       box = document.createElement("div");
       box.className = "notice info chooser";
       const text = document.createElement("span");
-      text.textContent = "刚刚开始了好几个任务，这个面板要显示哪一个？";
+      text.textContent = t("chooser.title");
       box.append(text);
       for (const task of tasks) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "pick";
-        const name = Object.assign(document.createElement("span"), { className: "pick-name", textContent: task.title ?? "新任务" });
+        const name = Object.assign(document.createElement("span"), { className: "pick-name", textContent: task.title ?? t("chooser.untitled") });
         const time = Object.assign(document.createElement("span"), { className: "pick-time", textContent: clockOf(task.startedAt) });
         button.append(name, time);
         button.addEventListener("click", () => switchTo(task.threadId));
@@ -619,9 +840,9 @@
   function setupNotices() {
     const setup = S.data?.setup;
     if (!setup) return [];
-    if (setup.changed === "enabled") return [notice("info", "已启用。重启 Codex 后生效，取消勾选的图就不再发送了。")];
-    if (setup.changed === "disabled") return [notice("warn", "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。")];
-    if (!setup.usesEngine) return [notice("info", "插件没有启用：Codex 现在直连，取消勾选不会生效。点右上角的“启用插件”，然后重启 Codex。")];
+    if (setup.changed === "enabled") return [notice("info", t("notice.enabled"))];
+    if (setup.changed === "disabled") return [notice("warn", t("notice.disabled"))];
+    if (!setup.usesEngine) return [notice("info", t("notice.notEnabled"))];
     return [];
   }
 
@@ -630,15 +851,16 @@
   let pluginKey = "";
   function renderPlugin() {
     const setup = S.data?.setup;
-    const key = !setup ? "" : setup.usesEngine ? "on" : "off";
+    const on = !!setup?.usesEngine;
+    const key = !setup ? "" : `${on ? "on" : "off"}|${lang}`;
     const box = $("plugin");
     if (key !== pluginKey) {
       pluginKey = key;
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = key === "on" ? "停用插件" : "启用插件";
-      button.className = key === "on" ? "off" : "on";
-      button.addEventListener("click", () => switchEngine(key !== "on"));
+      button.textContent = t(on ? "plugin.disable" : "plugin.enable");
+      button.className = on ? "off" : "on";
+      button.addEventListener("click", () => switchEngine(!on));
       box.replaceChildren(...(key ? [button] : []));
     }
     for (const button of box.children) button.disabled = S.switching;
@@ -649,22 +871,22 @@
     const stale = lastFresh > 0 && Date.now() - lastFresh > STALE_MS;
     button.classList.toggle("spinning", S.refreshing && S.manual);
     button.classList.toggle("stale", stale && !S.refreshing);
-    button.title = !lastFresh ? "刷新" : `刷新（${stale ? "有一会儿没更新了；" : ""}上次更新 ${clockOf(lastFresh)}）`;
+    button.title = !lastFresh ? t("refresh") : t(stale ? "refresh.stale" : "refresh.at", { time: clockOf(lastFresh) });
   }
 
   function renderList() {
     const nodes = [];
-    if (S.error) nodes.push(notice("error", S.error, { label: "重试", run: () => { S.error = null; render(); refresh(); } }));
+    if (S.error) nodes.push(notice("error", t(S.error.key, { message: S.error.message }), { label: t("notice.retry"), run: () => { S.error = null; render(); refresh(); } }));
     nodes.push(...setupNotices());
     if (S.data?.started === false) {
       const tasks = newTasks();
-      nodes.push(tasks.length > 1 ? chooser(tasks) : notice("info", "这个任务还没开始。发出第一条消息后，这里会自动切到这个任务。"));
+      nodes.push(tasks.length > 1 ? chooser(tasks) : notice("info", t("notice.waiting")));
     }
-    if (S.data?.historyMissing) nodes.push(notice("warn", "这个任务前面有一段历史找不到了（它所在的任务记录可能已被删除），那一段里的图片没法在这里列出。"));
-    if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
+    if (S.data?.historyMissing) nodes.push(notice("warn", t("notice.historyMissing")));
+    if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", t("notice.engineDown")));
     const sendNotice = S.data?.send?.notice;
-    if (sendNotice?.kind === "skipped") nodes.push(notice("error", `上一次请求（${timeOf(sendNotice.at)}）没能按勾选替换，图片原样发给了模型。原因：${sendNotice.reason}。`));
-    if (sendNotice?.kind === "websocket") nodes.push(notice("warn", "取消勾选时这一轮对话还在进行，这一轮剩下的请求仍带着原图；从下一条消息起生效。"));
+    if (sendNotice?.kind === "skipped") nodes.push(notice("error", t("notice.skipped", { time: timeOf(sendNotice.at), reason: t(MESSAGES[lang][`reason.${sendNotice.reason}`] ? `reason.${sendNotice.reason}` : "reason.other") })));
+    if (sendNotice?.kind === "websocket") nodes.push(notice("warn", t("notice.websocket")));
     const list = images();
     if (S.data && !list.length) nodes.push(emptyState);
     let turn;
@@ -674,7 +896,7 @@
         if (!turnLabels.has(turn)) {
           const label = document.createElement("div");
           label.className = "turn";
-          label.textContent = turn === null ? "更早" : `第 ${turn} 轮`;
+          label.textContent = turn === null ? t("turn.earlier") : t("turn.n", { n: turn });
           turnLabels.set(turn, label);
         }
         nodes.push(turnLabels.get(turn));
@@ -696,10 +918,10 @@
     const status = $("status");
     const count = S.pending.size;
     status.className = "status";
-    if (S.saving) status.textContent = "正在保存…";
-    else if (count) { status.textContent = `有 ${count} 处改动，点“确定”后生效`; status.classList.add("pending"); }
-    else if (S.flash) { status.textContent = S.flash; status.classList.add("ok"); }
-    else status.textContent = images().length ? "勾选的图片会随下一条消息发给模型" : "";
+    if (S.saving) status.textContent = t("footer.saving");
+    else if (count) { status.textContent = t("footer.pending", { count }); status.classList.add("pending"); }
+    else if (S.flash) { status.textContent = t(S.flash); status.classList.add("ok"); }
+    else status.textContent = images().length ? t("footer.hint") : "";
     $("undo").hidden = !count;
     $("undo").disabled = S.saving;
     $("confirm").disabled = !count || S.saving;
@@ -711,8 +933,8 @@
     if (!image) { viewer.hidden = true; return; }
     viewer.hidden = false;
     $("viewerId").textContent = image.id;
-    $("viewerName").textContent = image.name ?? "未命名";
-    $("viewerMeta").textContent = [image.turn === null ? null : `第 ${image.turn} 轮`, describe(image)].filter(Boolean).join(" · ");
+    $("viewerName").textContent = image.name ?? t("row.unnamed");
+    $("viewerMeta").textContent = [image.turn === null ? null : t("turn.n", { n: image.turn }), describe(image)].filter(Boolean).join(" · ");
     const input = $("viewerCheck").querySelector("input");
     input.checked = isChecked(image);
     input.disabled = !image.replaceable || S.saving;
@@ -724,7 +946,7 @@
       if (!img) { img = document.createElement("img"); img.alt = image.name ?? image.id; stage.replaceChildren(img); }
       if (img.src !== url) img.src = url;
     } else {
-      stage.innerHTML = `<span class="none">${S.viewer.loading ? "正在加载…" : "这张图无法预览"}</span>`;
+      stage.replaceChildren(Object.assign(document.createElement("span"), { className: "none", textContent: t(S.viewer.loading ? "viewer.loading" : "viewer.none") }));
     }
   }
 
@@ -759,7 +981,7 @@
 
   // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----
   if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
-  render();
+  applyLanguage();
   request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "codex-attachment-manager", version: "0.1.0" }, appCapabilities: {} })
     .then((init) => { applyHost(init?.hostContext); post({ method: "ui/notifications/initialized", params: {} }); })
     .catch(() => {})

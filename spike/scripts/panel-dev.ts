@@ -6,7 +6,7 @@
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
 // does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout;
 // with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once;
-// ?thread=gap for a fork whose original task was deleted, v0.1-13).
+// ?thread=gap for a fork whose original task was deleted, v0.1-13; ?lang=en for Codex in English, v0.1-14).
 // The demo task has a name, as if the user had renamed it in Codex (v0.1-9).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
@@ -150,7 +150,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   window.addEventListener("message", async (event) => {
     const m = event.data;
     if (!m || event.source !== frame.contentWindow) return;
-    if (m.method === "ui/initialize") send({ id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "panel-dev" }, hostCapabilities: { serverTools: {} }, hostContext: { theme, displayMode: "inline", locale: "zh-CN" } } });
+    if (m.method === "ui/initialize") send({ id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "panel-dev" }, hostCapabilities: { serverTools: {} }, hostContext: { theme, displayMode: "inline", locale: params.get("lang") === "en" ? "en-US" : "zh-CN" } } });
     else if (m.method === "ui/notifications/initialized") { send({ method: "ui/notifications/tool-result", params: await call("cam_panel", {}) }); demo(); }
     else if (m.method === "tools/call") { const delay = params.get("slow") ? 900 : 60; const result = await call(m.params.name, m.params.arguments); setTimeout(() => send({ id: m.id, result }), delay); }
   });
