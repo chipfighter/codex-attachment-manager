@@ -9,6 +9,10 @@ import test from "node:test";
 import { enableMcpServer } from "../../plugin/src/codexconfig.ts";
 import { needsNoProxy, planInstall, planUninstall, pluginStatus, SERVER_NAME } from "../../plugin/src/install.ts";
 
+// These tests check the Chinese wording: the language is fixed, so neither the system's language nor one a panel
+// reported on this machine decides it (v0.1-14).
+process.env.CAM_LANG = "zh";
+
 const CONFIG = 'model = "gpt-6-sol"\n\n[features]\nview_image = true\n\n[projects.\'d:\\\\work\']\ntrust_level = "trusted"\n';
 const base = { port: 17891 };
 const proxied = { httpProxy: "http://127.0.0.1:8888", noProxy: null };

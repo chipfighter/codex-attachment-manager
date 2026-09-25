@@ -12,6 +12,10 @@ import { callTool, resetSetupBaseline } from "../../plugin/src/plugin-server.ts"
 import { connectDirectly, pluginGone, useEngine, usesEngine } from "../../plugin/src/setup.ts";
 import { sampleSessions, THREAD } from "./testfixtures.ts";
 
+// These tests check the Chinese wording: the language is fixed, so neither the system's language nor one a panel
+// reported on this machine decides it (v0.1-14).
+process.env.CAM_LANG = "zh";
+
 const CONFIG = 'model = "gpt-6-sol"\n\n[features]\nview_image = true\n\n[plugins."codex-attachment-manager@codex-attachment-manager"]\nenabled = true\n';
 
 function tempHome(t: TestContext): { home: string; data: string } {

@@ -12,6 +12,10 @@ import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, o
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { png } from "./testkit.ts";
 
+// These tests check the Chinese wording: the language is fixed, so neither the system's language nor one a panel
+// reported on this machine decides it (v0.1-14).
+process.env.CAM_LANG = "zh";
+
 const none = () => null;
 
 test("outbound proxy comes from the environment, then Windows settings", () => {

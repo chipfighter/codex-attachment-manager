@@ -12,6 +12,10 @@ import { fileURLToPath } from "node:url";
 import { callTool, fromModel, PANEL_MIME, PANEL_URI, readResource, threadOf, TOOLS } from "../../plugin/src/plugin-server.ts";
 import { line, red, sampleSessions, startThread, THREAD, turn, upload } from "./testfixtures.ts";
 
+// These tests check the Chinese wording: the language is fixed, so neither the system's language nor one a panel
+// reported on this machine decides it (v0.1-14).
+process.env.CAM_LANG = "zh";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const modelMeta = { callId: "exec-1", "x-codex-turn-metadata": { thread_id: THREAD, turn_id: "t9" } };
 const panelMeta = { thread_id: THREAD, threadId: THREAD, progressToken: 3 };

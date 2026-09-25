@@ -2,7 +2,7 @@
 // v0.1; Chinese of any region gets Simplified Chinese, every other language gets English). The panel learns Codex's
 // interface language and reports it with its calls; it is kept in the data directory, where the engine (the text for
 // the model) and the plugin service (the tab's title) read it. Until a panel has reported one, the system language
-// counts; the command line always follows the system language.
+// counts; the command line always follows the system language. CAM_LANG=zh|en (tests, development) fixes the language.
 // Input: language tags (BCP 47 or POSIX, e.g. "zh-CN", "zh_TW.UTF-8", "en-US"), the environment, the data directory.
 // Output: "zh" | "en"; <data dir>/language.json = { "lang": "zh", "source": "codex" | "system", "at": "…" }.
 
@@ -24,6 +24,7 @@ export function langOf(tag: unknown): Lang | null {
 
 // POSIX locale variables when set (macOS, Linux, some Windows shells), else what the runtime reports (Windows).
 export function systemLang(env: NodeJS.ProcessEnv = process.env): Lang {
+  if (env.CAM_LANG === "zh" || env.CAM_LANG === "en") return env.CAM_LANG;
   for (const name of ["LC_ALL", "LC_MESSAGES", "LANG"]) {
     const lang = langOf(env[name]);
     if (lang) return lang;
@@ -59,5 +60,7 @@ export function rememberLang(lang: Lang, source: LangSource, file = languageFile
 }
 
 export function currentLang(file = languageFileOf()): Lang {
+  const fixed = process.env.CAM_LANG;
+  if (fixed === "zh" || fixed === "en") return fixed;
   return storedLang(file)?.lang ?? systemLang();
 }

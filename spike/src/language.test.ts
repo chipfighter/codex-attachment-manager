@@ -37,6 +37,8 @@ test("the language a panel reports is kept, with where it came from; without one
   assert.equal(readFileSync(file, "utf8"), written, "unchanged: not written again");
   rememberLang("zh", "system", file);
   assert.deepEqual([currentLang(file), storedLang(file)?.source], ["zh", "system"]);
+  process.env.CAM_LANG = "en";
+  try { assert.deepEqual([currentLang(file), systemLang({ CAM_LANG: "en", LANG: "zh_CN.UTF-8" })], ["en", "en"], "CAM_LANG fixes it (tests, development)"); } finally { delete process.env.CAM_LANG; }
 });
 
 test("the plugin's texts exist in both languages with the same {values}", () => {
