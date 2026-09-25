@@ -1,9 +1,10 @@
 // Purpose: P3-2 — lifecycle of the engine (the local proxy): one instance per machine, `ensure` starts it in the
 // background when it is not running, and it exits by itself once no Codex process is left.
-// Input: the port; process lists from `tasklist` on Windows. Output: health checks, a detached engine process.
+// Input: the port; process lists from `tasklist` on Windows and `ps` on macOS and Linux. Output: health checks, a
+// detached engine process.
 
 import { execFile, spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ENGINE_SERVICE = "codex-attachment-manager";
@@ -54,12 +55,19 @@ export function countCodexProcesses(tasklistCsv: string): number {
   return tasklistCsv.split(/\r?\n/).filter((line) => /^"codex\.exe",/i.test(line.trim())).length;
 }
 
+// v0.1: `ps -A -o comm=` prints one executable per line: the bare name on Linux, the full path on macOS. Codex's
+// command line and the app-server inside the desktop app are both named `codex`.
+export function countCodexInPs(psOutput: string): number {
+  return psOutput.split(/\r?\n/).filter((line) => posix.basename(line.trim()) === "codex").length;
+}
+
 export function listCodexProcesses(): Promise<number> {
-  if (process.platform !== "win32") return Promise.resolve(1);
+  const windows = process.platform === "win32";
+  const [file, args] = windows ? ["tasklist", ["/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"]] : ["ps", ["-A", "-o", "comm="]];
   return new Promise((resolve) => {
-    execFile("tasklist", ["/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"], { windowsHide: true }, (error, stdout) => {
+    execFile(file, args, { windowsHide: true }, (error, stdout) => {
       // If the check itself fails, assume Codex is still there rather than shutting down under it.
-      resolve(error ? 1 : countCodexProcesses(stdout));
+      resolve(error ? 1 : windows ? countCodexProcesses(stdout) : countCodexInPs(stdout));
     });
   });
 }

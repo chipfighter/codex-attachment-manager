@@ -1,1 +1,5 @@
 *.cmd text eol=crlf
+# Shell scripts run on macOS and Linux; a CR would break them even when checked out on Windows.
+*.sh text eol=lf
+plugin/scripts/launch text eol=lf
+cam text eol=lf

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import zlib from "node:zlib";
-import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
+import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { png } from "./testkit.ts";
 
@@ -19,6 +19,14 @@ test("outbound proxy comes from the environment, then Windows settings", () => {
   assert.deepEqual(outboundProxy({}, () => "http=10.0.0.1:80;https=10.0.0.2:8080"), { host: "10.0.0.2", port: 8080 });
   assert.deepEqual(outboundProxy({}, () => "127.0.0.1:7890"), { host: "127.0.0.1", port: 7890 });
   assert.equal(outboundProxy({}, none), null);
+});
+
+test("the macOS system proxy is read from scutil: HTTPS first, then HTTP, only when enabled", () => {
+  const scutil = (lines: string[]) => `<dictionary> {\n  ExceptionsList : <array> {\n    0 : *.local\n  }\n${lines.map((line) => `  ${line}\n`).join("")}}\n`;
+  assert.equal(macProxy(scutil(["HTTPEnable : 1", "HTTPPort : 8080", "HTTPProxy : 10.0.0.1", "HTTPSEnable : 1", "HTTPSPort : 7890", "HTTPSProxy : 127.0.0.1"])), "127.0.0.1:7890");
+  assert.equal(macProxy(scutil(["HTTPEnable : 1", "HTTPPort : 8080", "HTTPProxy : 10.0.0.1", "HTTPSEnable : 0"])), "10.0.0.1:8080");
+  assert.equal(macProxy(scutil(["HTTPSEnable : 0", "SOCKSEnable : 1", "SOCKSPort : 1080", "SOCKSProxy : 127.0.0.1"])), null);
+  assert.deepEqual(outboundProxy({}, () => macProxy(scutil(["HTTPSEnable : 1", "HTTPSPort : 7890", "HTTPSProxy : 127.0.0.1"]))), { host: "127.0.0.1", port: 7890 });
 });
 
 test("NO_PROXY entries covering the upstream host mean a direct connection", () => {

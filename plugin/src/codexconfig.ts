@@ -4,7 +4,7 @@
 // client (which ignores respect_system_proxy before upstream #47742) reaches the local proxy too.
 // Nothing else in either file is touched.
 // P5 — a library only: cam.ts install / uninstall / status use it, and do every write and backup themselves.
-// Input: file texts. Codex home comes from CODEX_HOME or %USERPROFILE%\.codex. Output: next texts and status.
+// Input: file texts. Codex home comes from CODEX_HOME or ~/.codex. Output: next texts and status.
 // .env may hold credentials: it is never copied or printed, and its block is removed byte-exactly.
 
 import { execFileSync } from "node:child_process";
@@ -155,9 +155,10 @@ export function noProxyStatus(text: string): { managed: boolean; value: string |
   return { managed: begin >= 0, value: line ? line.slice(line.indexOf("=") + 1).trim() : null, conflict: base.body.split(base.eol).some((l) => NO_PROXY_LINE.test(l)) };
 }
 
-// What the desktop app inherits: the user's variable overrides the machine's.
+// What the desktop app inherits: on Windows the user's variable overrides the machine's. On macOS and Linux there is
+// no such store; the environment of the shell that runs the command is the closest guess (v0.1).
 export function persistedEnv(name: string): string | null {
-  if (process.platform !== "win32") return null;
+  if (process.platform !== "win32") return process.env[name] || process.env[name.toLowerCase()] || null;
   for (const key of ["HKCU\\Environment", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"]) {
     try {
       const out = execFileSync("reg", ["query", key, "/v", name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });

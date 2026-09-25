@@ -1,0 +1,5 @@
+#!/bin/sh
+# Purpose: the tool's command line on macOS and Linux without a separate Node install: runs plugin/src/cam.ts with the
+# same Node the plugin uses (the one Codex ships, else node 24+ on PATH). Usage: ./cam install | uninstall | status | ...
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$here/plugin/scripts/launch" "$here/plugin/src/cam.ts" "$@"

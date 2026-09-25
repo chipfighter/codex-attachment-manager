@@ -1,5 +1,5 @@
-# Unit tests on the three platforms Codex runs on. Only Windows is tested by hand, so these runs are the first check
-# that the plugin still starts on macOS and Linux.
+# Unit tests and an install-and-start smoke test on the three platforms Codex runs on. Only Windows is tested by hand,
+# so these runs are the first check that the plugin still starts on macOS and Linux.
 name: CI
 
 on:
@@ -33,3 +33,9 @@ jobs:
       - name: Unit tests
         working-directory: spike
         run: node --test
+      # The plugin as a user gets it: Codex's own command line installs it, a Codex thread starts its MCP server
+      # through .mcp.json and the launcher, and the MCP server starts the engine. No login needed.
+      - name: Install the Codex command line
+        run: npm install --global @openai/codex
+      - name: Plugin smoke test
+        run: node spike/src/plugin-smoke.ts
