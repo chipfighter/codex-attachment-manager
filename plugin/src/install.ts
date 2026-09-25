@@ -2,10 +2,12 @@
 // config.toml gets the proxy settings; ~/.codex/.env gets NO_PROXY only when the user's environment proxy would
 // otherwise swallow requests to this machine. Uninstall removes exactly those blocks.
 // P5 — the MCP server now comes with the plugin, which Codex's own command line installs (see cam.ts); an MCP server
-// block left by an earlier install is removed here.
+// block left by an earlier install is removed here. v0.1-14 — notes in the system language (the command line's reader).
 // Input: current texts and the user's persisted proxy variables. Output: next texts (envText null = delete the file).
 
 import { coversLoopback, disableMcpServer, disableProxy, enableNoProxy, enableProxy, noProxyValue } from "./codexconfig.ts";
+import { systemLang } from "./language.ts";
+import { say } from "./messages.ts";
 
 export const PLUGIN = "codex-attachment-manager";
 export const MARKETPLACE = "codex-attachment-manager";
@@ -25,14 +27,14 @@ export function planInstall(input: { configText: string; envText: string | null;
   const notes: string[] = [];
   const proxied = enableProxy(input.configText, `http://localhost:${input.port}/backend-api/codex`);
   const legacy = disableMcpServer(proxied.text);
-  if (legacy.changed) notes.push("去掉旧版写进 config.toml 的插件服务：现在由插件自己提供");
+  if (legacy.changed) notes.push(say(systemLang(), "note.legacyMcp"));
   let envText = input.envText;
   let envChanged = false;
   if (needsNoProxy(input.env)) {
     const next = enableNoProxy(input.envText ?? "", noProxyValue(input.env.noProxy));
     envText = next.text;
     envChanged = next.changed;
-    notes.push("写入 .env 的 NO_PROXY：环境变量里有代理，而且没有覆盖本机地址");
+    notes.push(say(systemLang(), "note.noProxy"));
   } else {
     // A block from an earlier install is no longer needed.
     const cleared = input.envText === null ? { text: null, changed: false } : disableProxy(input.envText);

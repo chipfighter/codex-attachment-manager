@@ -67,5 +67,5 @@ test("a panel's calls follow its binding until its own thread has a rollout", ()
   assert.equal(resolveThread("chatgpt:abc", sessionsDir, bindings), "chatgpt:abc");
   startThread(sessionsDir, PANEL);
   assert.equal(resolveThread(PANEL, sessionsDir, bindings), PANEL, "its own rollout wins");
-  assert.throws(() => bindThread(PANEL, "../x", bindings), /不是任务编号/);
+  assert.throws(() => bindThread(PANEL, "../x", bindings), /not a thread id/);
 });

@@ -11,6 +11,10 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// v0.1-14: a conflict with the user's settings carries a message key (messages.ts), so the panel and the command line
+// can say it in the user's language; the message itself stays English for logs.
+const conflict = (message: string, key: string, vars: Record<string, string> = {}) => Object.assign(new Error(message), { key, vars });
+
 export const BEGIN = "# >>> codex-attachment-manager: managed proxy setting, remove it with the tool >>>";
 export const END = "# <<< codex-attachment-manager <<<";
 
@@ -65,7 +69,7 @@ export function disableMcpServer(text: string): { text: string; changed: boolean
 
 export function enableMcpServer(text: string, name: string, command: string, args: string[]): { text: string; changed: boolean } {
   const { bom, body, eol } = parts(disableMcpServer(text).text);
-  if (body.split(eol).some((line) => line.trim() === `[mcp_servers.${name}]`)) throw new Error(`config.toml already defines mcp_servers.${name}; not overwriting it`);
+  if (body.split(eol).some((line) => line.trim() === `[mcp_servers.${name}]`)) throw conflict(`config.toml already defines mcp_servers.${name}; not overwriting it`, "conflict.mcpServer", { name });
   // JSON string syntax is valid TOML basic-string syntax, including backslashes in Windows paths.
   const block = [MCP_BEGIN, `[mcp_servers.${name}]`, `command = ${JSON.stringify(command)}`, `args = ${JSON.stringify(args)}`, 'default_tools_approval_mode = "approve"', END];
   const next = bom + body + (body === "" || body.endsWith(eol) ? "" : eol) + block.join(eol) + eol;
@@ -80,7 +84,7 @@ function removeBlocks(text: string, begin: string): { text: string; changed: boo
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].trim() !== begin) { kept.push(lines[i]); continue; }
     const end = lines.findIndex((line, j) => j > i && line.trim() === END);
-    if (end < 0) throw new Error("a managed block in config.toml has no end marker");
+    if (end < 0) throw conflict("a managed block in config.toml has no end marker", "conflict.noEnd");
     const atTop = kept.length === 0;
     i = end;
     if (atTop && lines[i + 1] === "") i++;
@@ -94,9 +98,9 @@ function removeBlocks(text: string, begin: string): { text: string; changed: boo
 export function enableProxy(text: string, url: string): { text: string; changed: boolean } {
   const { bom, body, eol } = parts(disableProxy(text).text);
   const lines = body.split(eol);
-  if (topLevelValue(lines, "openai_base_url") !== null) throw new Error("config.toml already sets openai_base_url; not overwriting it");
+  if (topLevelValue(lines, "openai_base_url") !== null) throw conflict("config.toml already sets openai_base_url; not overwriting it", "conflict.baseUrl");
   const own = userRespectSystemProxy(lines);
-  if (own !== null && own !== "true") throw new Error("config.toml turns respect_system_proxy off; not overriding it");
+  if (own !== null && own !== "true") throw conflict("config.toml turns respect_system_proxy off; not overriding it", "conflict.systemProxy");
   const header = featuresHeader(lines);
   const top = [BEGIN, `openai_base_url = "${url}"`];
   if (own === null && header < 0) top.push("features.respect_system_proxy = true");
@@ -142,7 +146,7 @@ export function coversLoopback(value: string | null): boolean {
 // The block goes first, like in config.toml, so disableProxy removes it and the blank line after it.
 export function enableNoProxy(text: string, value: string): { text: string; changed: boolean } {
   const { bom, body, eol } = parts(disableProxy(text).text);
-  if (body.split(eol).some((line) => NO_PROXY_LINE.test(line))) throw new Error(".env already sets NO_PROXY; not overriding it");
+  if (body.split(eol).some((line) => NO_PROXY_LINE.test(line))) throw conflict(".env already sets NO_PROXY; not overriding it", "conflict.noProxy");
   const next = bom + [BEGIN, `NO_PROXY=${value}`, END, ""].join(eol) + eol + body;
   return { text: next, changed: next !== text };
 }

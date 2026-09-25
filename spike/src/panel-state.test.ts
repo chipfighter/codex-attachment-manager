@@ -20,6 +20,7 @@ test("the ids the model asked for come from its latest reply only", () => {
   assert.deepEqual(requestedIds(records(turn("t1") + assistant("需要 IMG-001", "t1") + turn("t2") + assistant("好的，需要 “IMG-004” 和 IMG-002。", "t2"))), ["IMG-004", "IMG-002"]);
   assert.deepEqual(requestedIds(records(turn("t1") + assistant("need IMG-007 to answer", "t1") + turn("t2"))), ["IMG-007"], "a turn still running falls back to the one before");
   assert.deepEqual(requestedIds(records(turn("t1") + assistant("IMG-003 与 IMG-002 相同", "t1"))), [], "mentioning an id is not asking for it");
+  assert.deepEqual(requestedIds(records(turn("t1") + assistant("To answer that I need \"IMG-004\" and IMG-002.", "t1"))), ["IMG-004", "IMG-002"], "the English wording, quoted");
 });
 
 test("panel state lists every image with checked, same-content and requested flags", () => {
@@ -57,7 +58,7 @@ test("the size baseline: images the last request carried, images added since, an
 
 test("the panel is told when the engine could not rewrite, or a WebSocket turn kept the unchecked images", () => {
   const http = { at: "t1", transport: "http", decodedBytes: 900, rewrite: { skipped: "thread index: Error: boom" } };
-  assert.deepEqual(sendInfo({ latest: http, lastHttp: http }).notice, { kind: "skipped", at: "t1", reason: "读取这个任务的记录失败" });
+  assert.deepEqual(sendInfo({ latest: http, lastHttp: http }).notice, { kind: "skipped", at: "t1", reason: "index" });
   assert.deepEqual(sendInfo({ latest: { ...http, rewrite: { skipped: "rewrite failed: x" } }, lastHttp: { ...http, rewrite: { skipped: "rewrite failed: x" } } }).notice?.kind, "skipped");
   const busy = { at: "t2", transport: "websocket", event: "active-while-unchecked" };
   assert.deepEqual(sendInfo({ latest: busy, lastHttp: http }).notice, { kind: "websocket", at: "t2" });
