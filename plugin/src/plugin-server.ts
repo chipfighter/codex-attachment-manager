@@ -5,6 +5,7 @@
 // Only the user may check or uncheck: calls the model makes (they carry Codex's turn metadata) are refused.
 // P4 — the panel page itself (an MCP App resource). cam_panel declares a "thread" entrypoint, so Codex lists the panel
 // under the side panel's New Tab → 插件和 MCP, and the user opens it without the model.
+// v0.1-5 — cam_setup: the panel's 启用 / 停用 point Codex at the engine or back to a direct connection (setup.ts).
 // Input: MCP JSON-RPC over stdio. Env: CAM_ENGINE_PORT (default 17891), CAM_NO_ENGINE=1 (tests), CAM_DATA_DIR.
 // Output: tool results; <data dir>/plugin-server.jsonl (events and counts only, no conversation content).
 
@@ -17,6 +18,7 @@ import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir } from "./paths.ts";
+import { connectDirectly, useEngine, usesEngine } from "./setup.ts";
 
 type Json = Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +50,13 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: { ...threadArg, id: { type: "string" }, maxSide: { type: "number" } }, required: ["id"] },
     _meta: APP_ONLY,
   },
+  {
+    name: "cam_setup",
+    title: "上下文素材：启用或停用",
+    description: "素材面板内部使用：让 Codex 经过本机代理（启用），或者恢复直连（停用），重启 Codex 后生效。只有用户能操作，模型调用会被拒绝。",
+    inputSchema: { type: "object", properties: { ...threadArg, enable: { type: "boolean" } }, required: ["enable"] },
+    _meta: APP_ONLY,
+  },
 ];
 
 // A stack of pictures, drawn for light and dark themes (Codex takes https or data URLs only).
@@ -67,6 +76,11 @@ export function readResource(uri: string): Json {
 
 // Whether this instance last found the engine running; null until the first check (and in tests).
 let engineRunning: boolean | null = null;
+const enginePort = Number(process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);
+// v0.1-5: whether config.toml points Codex at the engine, and what the panel's 启用 / 停用 changed since this instance
+// started: Codex reads the setting when it starts, so a change waits for a restart.
+let setupChanged: "enabled" | "disabled" | null = null;
+const setupState = () => ({ usesEngine: usesEngine(), changed: setupChanged });
 
 function log(entry: Json): void {
   const root = dataDir();
@@ -91,12 +105,20 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
   const options = { sessionsDir };
   if (name === "cam_panel") {
     const state = loadPanelState(threadId, options);
-    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning } };
+    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning, setup: setupState() } };
   }
   if (name === "cam_set_selection") {
     if (fromModel(meta)) throw new Error("只有用户能勾选或取消图片；需要某张图时，请回复“需要 IMG-xxx”。");
     const state = applySelection(threadId, { uncheck: args.uncheck, check: args.check, checkAll: args.checkAll }, options);
-    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning } };
+    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning, setup: setupState() } };
+  }
+  if (name === "cam_setup") {
+    if (fromModel(meta)) throw new Error("只有用户能启用或停用。");
+    // A conflict with the user's own settings throws here, before anything is written.
+    const plan = args.enable === true ? useEngine(enginePort) : connectDirectly();
+    setupChanged = args.enable === true ? "enabled" : "disabled";
+    const state = loadPanelState(threadId, options);
+    return { content: [{ type: "text", text: args.enable === true ? "已启用，重启 Codex 后生效。" : "已停用，重启 Codex 后恢复直连。" }], structuredContent: { ...state, engineRunning, setup: setupState(), notes: plan.notes } };
   }
   if (name === "cam_image") {
     const image = imageFor(threadId, String(args.id), Number(args.maxSide ?? 160), options);
@@ -108,11 +130,10 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
 
 function main(): void {
   const send = (message: Json) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
-  const port = Number(process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);
   let engineState = "";
   const supervise = async () => {
     if (process.env.CAM_NO_ENGINE === "1") return;
-    const result = await ensureEngine({ port });
+    const result = await ensureEngine({ port: enginePort });
     const replaced = result.replaced ? { replacedPid: result.replaced.pid, replacedBuild: result.replaced.build ?? null } : {};
     if (result.state !== "running" || engineState !== "running") log({ event: "engine", state: result.state, enginePid: result.health?.pid ?? null, build: result.health?.build ?? null, ...replaced });
     engineState = result.state;
@@ -148,7 +169,7 @@ function main(): void {
       try {
         const result = callTool(params.name, params.arguments ?? {}, params._meta);
         // The open panel reads its state every few seconds and loads each image once; only changes are worth a line.
-        if (params.name === "cam_set_selection" || fromModel(params._meta)) log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta) });
+        if (params.name === "cam_set_selection" || params.name === "cam_setup" || fromModel(params._meta)) log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta) });
         send({ id, result });
       } catch (error) {
         log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta), error: String(error) });

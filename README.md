@@ -10,45 +10,58 @@
 
 - Codex 右侧的侧边面板里多出一个“上下文素材”标签页，按时间顺序列出这个任务里的全部图片：你上传的，以及模型查看、生成的。
 - 取消勾选的图，从下一条消息起换成一小段占位文字。如果有内容相同的图还在发送，占位文字会指向那一张。任务不换，对话连续。
-- 模型需要某张被取消的图时，会回复“需要 IMG-xxx”。给不给，由你在面板里决定。
+- 模型知道那些图是你为了节省上下文省略的：它之前看着原图给出的回答仍然算数，不会因此改口，也不会编造没看到的细节。需要某张图时，它会回复“需要 IMG-xxx”，给不给由你在面板里决定。
 - 面板顶部显示下一条消息会发送什么，以及请求大约能小多少。
 
 ## 工作原理
 
 - 插件在本机启动一个小代理（引擎），Codex 发往 OpenAI 的请求先经过它。
-- 你取消勾选的图，在请求发出前被换成占位符；其余内容原样转发。
+- 你取消勾选的图，在请求发出前被换成占位符，并附上一条说明，告诉模型这些图是你省略的；其余内容原样转发。
 - 勾选状态按任务分别保存，只有你能改，模型不能。
 - 面板是 Codex 的插件页面，从侧边面板手动打开，不经过模型，也不花 token。
 
 ## 环境要求
 
-- Windows：Codex 桌面版，在 26.917 上实测过。
-- macOS、Linux：CI 上验证过 Codex 能装上插件、启动插件服务和引擎，但还没有人在这两个平台的桌面版上实测过。遇到问题请在 GitHub 上提 issue。
+- Codex 桌面版。Windows 上在 26.917 上实测过。
+- macOS、Linux：CI 上验证过 Codex 能装上插件、启动插件服务和引擎，安装和卸载命令也能正常工作；但还没有人在这两个平台的桌面版上实测过。遇到问题请[提 issue](https://github.com/chipfighter/codex-attachment-manager/issues)。
 - 不需要另外安装 Node：插件使用 Codex 自带的 Node 24；找不到时，才用系统里 24 以上的 `node`。
 
 ## 安装
 
-```bat
-git clone git@github.com:chipfighter/codex-attachment-manager.git
-cd codex-attachment-manager
-cam install
+### 方式一：在 Codex 里安装，不用开终端
+
+1. 打开 Codex 的插件页面，点“添加插件市场”。
+2. “来源”填 `chipfighter/codex-attachment-manager`，其余留空，点“添加市场”。
+3. 在插件列表里找到“上下文素材管理器”，安装。
+4. 打开一个任务，点右上角“显示/隐藏侧边面板”，再点“新建标签页”，在“插件和 MCP”下选“上下文素材”。找不到的话，先重启一次 Codex。
+5. 面板顶部会提示“还没有接入 Codex”。点“启用”，然后**重启 Codex**。
+
+### 方式二：一行命令
+
+Windows（PowerShell）：
+
+```powershell
+irm https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/install.ps1 | iex
 ```
 
-安装会做下面几件事：
+macOS、Linux：
 
-1. 用 Codex 自己的命令行，把这个仓库登记为插件市场，并安装插件。
-2. 启动装好的插件服务做一次自检；通过了，才改下一步的设置。
-3. 在 `~/.codex/config.toml` 里写入一段带标记的代理设置。如果你的环境变量里设了代理，还会在 `~/.codex/.env` 里写一段 `NO_PROXY`，只包含本机地址。
+```bash
+curl -fsSL https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/install.sh | sh
+```
 
-改之前，`config.toml` 会先备份到数据目录。
+命令会用 Codex 自己的命令行装好插件，并写好代理设置。装完**重启 Codex**。以后再运行一次，就是升级到最新版本。
 
-然后**重启 Codex**。
+### 安装会改什么
+
+- 在 `~/.codex/config.toml` 里写一段带标记的代理设置，改之前先备份到数据目录。
+- 如果你的环境变量里设了代理，还会在 `~/.codex/.env` 里写一段 `NO_PROXY`，只包含本机地址。
+- 别的设置一概不动。如果你自己已经设了 `openai_base_url`，安装会停下来，什么都不写。
 
 ## 使用
 
-1. 打开一个任务，点右上角“显示/隐藏侧边面板”。
-2. 在侧边面板里点“新建标签页”，在“插件和 MCP”下选“上下文素材”。
-3. 取消勾选不想再发送的图（点缩略图可以看大图），然后点“确定”。从下一条消息起生效。
+1. 打开一个任务，在侧边面板里打开“上下文素材”（位置见上面安装的第 4 步）。
+2. 取消勾选不想再发送的图（点缩略图可以看大图），然后点“确定”。从下一条消息起生效。
 
 面板里的标签：
 
@@ -63,26 +76,42 @@ cam install
 
 ## 卸载
 
-```bat
-cam uninstall
+**先停用，再移除**：在面板标题右侧点“停用”并确认，然后在插件页面移除插件，重启 Codex。
+
+也可以用一行命令，它会恢复直连，并移除插件：
+
+Windows（PowerShell）：
+
+```powershell
+irm https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/uninstall.ps1 | iex
 ```
 
-卸载会先恢复直连，再移除插件，最后提示你重启 Codex。
+macOS、Linux：
 
-**请用这个命令卸载，不要只在 Codex 的插件页面里关掉或移除插件。** 只关插件的话，代理设置还在，却没有东西启动引擎，Codex 会连不上。万一遇到这种情况，运行一次 `cam uninstall` 就能恢复。
+```bash
+curl -fsSL https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/uninstall.sh | sh
+```
 
-`cam status` 可以查看当前的安装状态。
+勾选记录和日志留在数据目录里（见下面“数据和隐私”），不需要可以删掉。
+
+## Codex 连不上怎么办
+
+如果没先停用就移除了插件，或者引擎没能启动，Codex 会报错，错误里带着 `localhost:17891`。这时运行上面的卸载命令，再重启 Codex，就能恢复直连。卸载命令不需要插件的文件，插件删掉了也能用。
+
+macOS、Linux 上，插件被移除或关掉后，引擎会自己恢复直连，下次启动 Codex 时生效。
 
 ## 已知限制
 
 - 目前只管理图片，其他类型的文件以后再支持。
 - Codex 自带生图工具的结果不能取消。
 - 取消勾选时，如果这一轮对话还在进行，并且走的是 WebSocket，这一轮剩下的请求仍会带着原图。面板会提示，从下一条消息起生效。
+- 启用、停用和升级，都要重启 Codex 才生效。
 - Codex 刚启动的头几十秒里，引擎可能会重启几次，偶尔会看到一次“正在重新连接”。
+- 引擎沿用系统代理：Windows 读系统设置，macOS 只认 HTTP(S) 代理（不支持 PAC 和 SOCKS），Linux 读 `HTTPS_PROXY` 等环境变量。
 
 ## 数据和隐私
 
-- 所有数据只留在本机的 `%LOCALAPPDATA%\codex-attachment-manager`：
+- 所有数据只留在本机的数据目录：Windows 是 `%LOCALAPPDATA%\codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 是 `~/.local/share/codex-attachment-manager`。里面有：
   - 勾选记录；
   - 请求统计：只记大小和数量，不记内容；
   - 日志：不记对话内容和凭据；
@@ -92,10 +121,11 @@ cam uninstall
 
 ## 开发
 
-- 插件本体在 `plugin/`；`spike/` 里是测试和早期实验脚本。
-- 运行测试：`cd spike && node --test`
-- 不开 Codex 调面板：`node spike/scripts/panel-dev.ts`，然后在浏览器里打开 `http://127.0.0.1:17895/?solo=1`。页面用合成的测试图，不读取你的真实数据。
-- 规格、方案和各阶段报告在 `docs/` 下，从 [docs/spec.md](docs/spec.md) 读起。
+- 插件本体在 `plugin/`；`spike/` 里是测试和早期实验脚本；`scripts/` 里是一行命令用的安装、卸载脚本。
+- 从源码装进自己的 Codex：在仓库里运行 `cam install`（macOS、Linux 上是 `./cam install`），卸载用 `cam uninstall`，`cam status` 查看安装状态。
+- 运行测试：`cd spike && node --test`。CI 在 Windows、macOS、Linux 上跑全部单元测试，再用 Codex 自己的命令行真的装一遍插件、跑一遍安装和卸载脚本。
+- 不开 Codex 调面板：`node spike/scripts/panel-dev.ts`，然后在浏览器里打开 `http://127.0.0.1:17895/?solo=1`。页面用合成的测试图和一个临时的 Codex 目录，不读取、不修改你的真实数据。
+- 规格、方案和各阶段报告在 `docs/` 下，从 [docs/spec.md](docs/spec.md) 读起。更新记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 

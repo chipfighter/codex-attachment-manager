@@ -9,6 +9,7 @@
   images in history order; the user previews them, checks or unchecks them, and confirms. Nothing is sent to the model.
   Input: the MCP Apps bridge (postMessage) — Codex's call of cam_panel, and our own calls of cam_panel, cam_image and
   cam_set_selection. Output: selection changes through cam_set_selection. Self-contained: no network, no storage.
+  v0.1-5 — 启用 / 停用 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -56,6 +57,8 @@
   .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
   .count { padding: 0 7px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 20px; font-variant-numeric: tabular-nums; }
   .count:empty { display: none; }
+  .quiet { margin-left: auto; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--text-3); font-size: 12px; cursor: pointer; transition: background .15s, color .15s; }
+  .quiet:hover { background: var(--bg-soft); color: var(--text-2); }
   .plan { margin-top: 4px; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .plan b { font-weight: 600; color: var(--text); }
   .meter { margin-top: 12px; padding: 10px 12px 11px; border-radius: 12px; background: var(--bg-soft); }
@@ -121,8 +124,14 @@
   .notice { margin: 12px 8px 0; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; display: flex; gap: 10px; align-items: flex-start; }
   .notice.warn { background: var(--warn-bg); color: var(--warn); }
   .notice.error { background: var(--danger-bg); color: var(--danger); }
+  .notice.info { background: var(--info-bg); color: var(--text); }
+  .notice.cta { align-items: center; }
   .notice .grow { flex: 1; }
-  .notice button { border: 0; background: none; padding: 0; font-weight: 600; cursor: pointer; color: inherit; font-size: 12.5px; }
+  .notice button { flex: none; border: 0; background: none; padding: 0; font-weight: 600; cursor: pointer; color: inherit; font-size: 12.5px; }
+  .notice button.primary { height: 26px; padding: 0 12px; border-radius: 999px; background: var(--accent); color: var(--accent-text); transition: background .15s, transform .1s; }
+  .notice button.primary:hover { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
+  .notice button.primary:active:not(:disabled) { transform: scale(.97); }
+  .notice button:disabled { opacity: .5; cursor: default; }
 
   .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-3); }
   .empty svg { width: 36px; height: 36px; margin-bottom: 6px; }
@@ -165,7 +174,7 @@
 </head>
 <body>
 <header>
-  <div class="title"><h1>图片</h1><span class="count" id="count"></span></div>
+  <div class="title"><h1>图片</h1><span class="count" id="count"></span><button class="quiet" id="disable" type="button" hidden>停用</button></div>
   <div class="plan" id="plan">正在读取…</div>
   <div class="meter" id="meter" hidden>
     <div class="meter-head"><span id="meterLabel"></span><b id="meterValue"></b><span class="meter-full" id="meterFull"></span></div>
@@ -247,6 +256,8 @@
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
+    confirmDisable: false,         // the 停用 confirmation is showing
+    switching: false,              // a 启用 / 停用 call is under way
   };
   const images = () => S.data?.images ?? [];
   const byId = (id) => images().find((image) => image.id === id);
@@ -306,6 +317,21 @@
       S.error = "保存失败：" + error.message;
     } finally {
       S.saving = false; render();
+    }
+  }
+
+  // 启用 / 停用: Codex reads the setting when it starts, so either one waits for a restart (the notices say so).
+  async function switchEngine(enable) {
+    if (S.switching) return;
+    S.switching = true; render();
+    try {
+      const result = await callTool("cam_setup", { enable });
+      S.confirmDisable = false;
+      ingest(result.structuredContent);
+    } catch (error) {
+      S.error = (enable ? "启用失败：" : "停用失败：") + error.message;
+    } finally {
+      S.switching = false; render();
     }
   }
 
@@ -434,6 +460,8 @@
   }
 
   function renderHeader() {
+    const setup = S.data?.setup;
+    $("disable").hidden = !setup?.usesEngine || !!setup.changed || S.confirmDisable;
     const list = images();
     const plan = $("plan");
     $("count").textContent = list.length ? String(list.length) : "";
@@ -467,29 +495,43 @@
 
   // Notices are reused while their text stays the same, so re-rendering does not move the list around.
   const notices = new Map();
-  function notice(tone, text, action) {
-    const key = `${tone}|${text}`;
+  function notice(tone, text, ...actions) {
+    const key = `${tone}|${text}|${actions.map((action) => action.label).join("|")}`;
     if (notices.has(key)) return notices.get(key);
     const box = document.createElement("div");
     notices.set(key, box);
-    box.className = `notice ${tone}`;
+    box.className = `notice ${tone}${actions.some((action) => action.primary) ? " cta" : ""}`;
     const span = document.createElement("span");
     span.className = "grow";
     span.textContent = text;
     box.append(span);
-    if (action) {
+    for (const action of actions) {
       const button = document.createElement("button");
+      button.type = "button";
       button.textContent = action.label;
+      if (action.primary) button.className = "primary";
+      if (action.switches) button.dataset.switches = "1";
       button.addEventListener("click", action.run);
       box.append(button);
     }
     return box;
   }
 
+  function setupNotices() {
+    const setup = S.data?.setup;
+    if (!setup) return [];
+    if (setup.changed === "enabled") return [notice("info", "已启用。重启 Codex 后生效，取消勾选的图就不再发送了。")];
+    if (setup.changed === "disabled") return [notice("warn", "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。", { label: "重新启用", run: () => switchEngine(true), switches: true })];
+    if (!setup.usesEngine) return [notice("info", "还没有接入 Codex：启用后重启 Codex，取消勾选才会生效。", { label: "启用", run: () => switchEngine(true), primary: true, switches: true })];
+    if (S.confirmDisable) return [notice("warn", "停用后，Codex 下次启动时恢复直连，取消勾选的图会照常发送。卸载插件前请先停用。", { label: "停用", run: () => switchEngine(false), switches: true }, { label: "取消", run: () => { S.confirmDisable = false; render(); } })];
+    return [];
+  }
+
   function renderList() {
     const nodes = [];
     if (S.error) nodes.push(notice("error", S.error, { label: "重试", run: () => { S.error = null; render(); refresh(); } }));
-    if (S.data?.engineRunning === false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
+    nodes.push(...setupNotices());
+    if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
     const sendNotice = S.data?.send?.notice;
     if (sendNotice?.kind === "skipped") nodes.push(notice("error", `上一次请求（${timeOf(sendNotice.at)}）没能按勾选替换，图片原样发给了模型。原因：${sendNotice.reason}。`));
     if (sendNotice?.kind === "websocket") nodes.push(notice("warn", "取消勾选时这一轮对话还在进行，这一轮剩下的请求仍带着原图；从下一条消息起生效。"));
@@ -517,6 +559,7 @@
     // Only touch the list when its items changed, so scrolling and keyboard focus are kept.
     const current = main.children;
     if (nodes.length !== current.length || nodes.some((node, index) => node !== current[index])) main.replaceChildren(...nodes);
+    for (const button of main.querySelectorAll("button[data-switches]")) button.disabled = S.switching;
     for (const image of list) queueThumb(image.id);
   }
 
@@ -582,6 +625,7 @@
   $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
   $("undo").addEventListener("click", () => { S.pending.clear(); render(); });
+  $("disable").addEventListener("click", () => { S.confirmDisable = true; render(); main.scrollTo({ top: 0 }); });
   $("confirm").addEventListener("click", confirm);
 
   // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----

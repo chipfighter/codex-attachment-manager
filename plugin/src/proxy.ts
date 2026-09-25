@@ -25,6 +25,7 @@ import { isEntryPoint } from "./entry.ts";
 import { dataDir, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
+import { connectDirectly, pluginGone, usesEngine } from "./setup.ts";
 import { effectiveSelection, selectionDir } from "./selection.ts";
 import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
 
@@ -241,7 +242,25 @@ async function main(): Promise<void> {
   let sequence = 0;
   log({ at: startedAt, event: "engine-start", pid: process.pid, port, build, version });
   if (!process.argv.includes("--stay")) {
+    // v0.1-5: a plugin removed or turned off without 停用 leaves Codex pointed at an engine nothing will start again.
+    // Seen in two checks in a row (or once more as the engine exits, when Codex is gone and cannot be mid-write), Codex
+    // goes back to connecting directly from its next start; until then this engine keeps serving. On Windows the engine
+    // usually ends together with the plugin's MCP server, so there the panel's 停用 or the uninstall command does it.
+    let gone = 0;
+    const checkPlugin = (final: boolean) => {
+      try {
+        const state = pluginGone();
+        gone = state ? gone + 1 : 0;
+        if (!state || (!final && gone < 2) || !usesEngine()) return;
+        connectDirectly();
+        log({ at: new Date().toISOString(), event: "connect-directly", pid: process.pid, reason: `plugin ${state}` });
+      } catch (error) {
+        log({ at: new Date().toISOString(), event: "plugin-check-failed", pid: process.pid, error: String(error) });
+      }
+    };
+    setInterval(() => checkPlugin(false), 15_000).unref();
     watchForCodex(() => {
+      checkPlugin(true);
       log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: "no Codex process left" });
       process.exit(0);
     });

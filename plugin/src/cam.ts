@@ -4,22 +4,25 @@
 // (Codex copies it into its plugin cache and starts its MCP server, which keeps the engine running), checks that the
 // installed copy starts, and only then points Codex at the engine. uninstall goes the other way round. Either way
 // Codex is never left pointed at an engine that nothing would start.
-// Input: install [--port N] | uninstall | status | list|uncheck|check|check-all <thread id> [IMG-…].
+// v0.1-5: setup, run from the copy Codex installed (the install scripts do this after Codex's own command line added
+// the plugin), points Codex at the engine and starts it. The settings themselves are switched in setup.ts.
+// Input: install [--port N] | setup [--port N] | uninstall | status | list|uncheck|check|check-all <thread id> [IMG-…].
 // Output: config.toml (copied to <data dir>/config-backup/ before every change), ~/.codex/.env (never copied or
 // printed: it may hold credentials), the plugin cache (through Codex's command line), the selection files, and a
 // summary on stdout. Rollouts are only read.
 
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { findCodexCli, runCodex } from "./codexcli.ts";
-import { codexHome, MCP_BEGIN, noProxyStatus, persistedEnv, proxyStatus } from "./codexconfig.ts";
+import { codexHome, MCP_BEGIN, noProxyStatus, proxyStatus } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
-import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, planUninstall, pluginStatus, type Plan } from "./install.ts";
+import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, pluginStatus } from "./install.ts";
 import { applySelection, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir, selectionDirOf } from "./paths.ts";
+import { backupConfig, connectDirectly, readConfig, readEnv, useEngine, userProxyEnv } from "./setup.ts";
 
 type Json = Record<string, any>;
 const KIND: Record<string, string> = { upload: "上传", view: "工具查看", generated: "生成", tool: "工具结果" };
@@ -46,27 +49,6 @@ function table(state: PanelState): string {
     "编号 | 状态 | 来源 | 名称 | 轮次 | 尺寸 | 大小 | 内容相同 | 备注",
     ...rows,
   ].join("\n");
-}
-
-function backupConfig(configFile: string): void {
-  if (!existsSync(configFile)) return;
-  const backups = join(dataDir(), "config-backup");
-  mkdirSync(backups, { recursive: true });
-  copyFileSync(configFile, join(backups, `config.toml.${new Date().toISOString().replaceAll(":", "-")}`));
-}
-
-function applyPlan(plan: Plan, configFile: string, envFile: string): void {
-  if (plan.configChanged) {
-    backupConfig(configFile);
-    writeFileSync(configFile, plan.configText, "utf8");
-  }
-  if (plan.envChanged) {
-    if (plan.envText === null) rmSync(envFile, { force: true });
-    else {
-      writeFileSync(`${envFile}.cam-tmp`, plan.envText, "utf8");
-      renameSync(`${envFile}.cam-tmp`, envFile);
-    }
-  }
 }
 
 // Codex may store the marketplace path with the \\?\ prefix; compare the plain paths, ignoring case on Windows.
@@ -145,20 +127,16 @@ function migrateSelections(): number {
 
 async function main(): Promise<void> {
   const [command, threadId, ...ids] = process.argv.slice(2);
-  const configFile = join(codexHome(), "config.toml");
-  const envFile = join(codexHome(), ".env");
-  const readConfig = () => (existsSync(configFile) ? readFileSync(configFile, "utf8") : "");
-  const readEnv = () => (existsSync(envFile) ? readFileSync(envFile, "utf8") : null);
-  const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : DEFAULT_PORT);
+  // The same port the plugin's MCP server uses: --port, else CAM_ENGINE_PORT, else the default.
+  const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);
 
   if (command === "install") {
     if (!existsSync(join(repository, ".agents", "plugins", "marketplace.json"))) throw new Error("请在仓库里运行：node plugin/src/cam.ts install");
     const cli = findCodexCli();
     if (!cli) throw new Error("找不到 Codex 的命令行。请先安装 Codex 桌面版并至少打开过一次，或者安装 Codex 命令行；也可以用环境变量 CODEX_CLI_PATH 指定它的位置。");
-    const env = { httpProxy: persistedEnv("HTTPS_PROXY") ?? persistedEnv("HTTP_PROXY") ?? persistedEnv("ALL_PROXY"), noProxy: persistedEnv("NO_PROXY") };
     // A conflict with the user's own settings stops everything before anything changes.
-    planInstall({ configText: readConfig(), envText: readEnv(), env, port });
-    backupConfig(configFile);
+    planInstall({ configText: readConfig(), envText: readEnv(), env: userProxyEnv(), port });
+    backupConfig();
     const steps: string[] = [];
     const registered = pluginStatus(readConfig()).marketplace;
     if (registered && !samePath(registered, repository)) { codex(cli, ["plugin", "marketplace", "remove", MARKETPLACE]); steps.push("去掉指向别处的旧插件市场"); }
@@ -171,18 +149,25 @@ async function main(): Promise<void> {
     const test = await selfTest(installed);
     if (!test.ok) throw new Error(`装好的插件服务没能启动：${test.error}。代理设置没有写入，Codex 仍然直连。`);
     steps.push(`自检通过：插件服务能启动，提供 ${test.tools.join("、")}`);
-    const plan = planInstall({ configText: readConfig(), envText: readEnv(), env, port });
-    applyPlan(plan, configFile, envFile);
+    const plan = useEngine(port);
     const migrated = migrateSelections();
     // The installed copy runs the engine, as it will when Codex starts it; an older engine still running is replaced.
     const engine = await ensureEngine({ port, dir: join(installed, "src") });
     console.log(JSON.stringify({ command, steps, configChanged: plan.configChanged, envChanged: plan.envChanged, notes: plan.notes, migratedSelections: migrated, dataDir: dataDir(), engine: engine.state, enginePid: engine.health?.pid ?? null, next: "重启 Codex 后生效。面板在任务右侧的侧边面板：新建标签页 → 插件和 MCP → 上下文素材" }, null, 2));
     return;
   }
+  if (command === "setup") {
+    // Only once Codex has the plugin: otherwise nothing would start the engine after Codex restarts.
+    if (!pluginStatus(readConfig()).installed || !existsSync(pluginCacheDir(pluginVersion()))) throw new Error("插件还没有装进 Codex：请先安装插件，再运行 setup。");
+    const plan = useEngine(port);
+    // Started from this copy, which is the installed one when the install scripts run it.
+    const engine = await ensureEngine({ port });
+    console.log(JSON.stringify({ command, configChanged: plan.configChanged, envChanged: plan.envChanged, notes: plan.notes, dataDir: dataDir(), engine: engine.state, enginePid: engine.health?.pid ?? null, next: "重启 Codex 后生效。面板在任务右侧的侧边面板：新建标签页 → 插件和 MCP → 上下文素材" }, null, 2));
+    return;
+  }
   if (command === "uninstall") {
     // Codex goes back to connecting directly first; only then is the plugin that starts the engine removed.
-    const plan = planUninstall({ configText: readConfig(), envText: readEnv() });
-    applyPlan(plan, configFile, envFile);
+    const plan = connectDirectly();
     const steps = ["恢复直连：去掉代理设置" + (plan.envChanged ? "和 .env 里的 NO_PROXY" : "")];
     const cli = findCodexCli();
     const status = pluginStatus(readConfig());
@@ -208,7 +193,7 @@ async function main(): Promise<void> {
     }, null, 2));
     return;
   }
-  if (!command || !threadId) throw new Error("usage: cam.ts install [--port N] | uninstall | status | list|uncheck|check|check-all <thread id> [IMG-…]");
+  if (!command || !threadId) throw new Error("usage: cam.ts install [--port N] | setup [--port N] | uninstall | status | list|uncheck|check|check-all <thread id> [IMG-…]");
   const options = { sessionsDir: join(codexHome(), "sessions") };
   if (command === "list") console.log(table(loadPanelState(threadId, options)));
   else if (command === "uncheck") console.log(table(applySelection(threadId, { uncheck: ids }, options)));

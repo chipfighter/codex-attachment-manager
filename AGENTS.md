@@ -13,7 +13,8 @@ Codex 上下文素材管理器（暂名）：让用户逐轮决定，Codex 任�
 
 - 原始对话记录和素材文件始终只读。
 - 真实数据不进仓库：从真实会话和用户素材里提取的内容只能放在本机的 `local/`（已被 git 忽略）或工具的数据目录 `%LOCALAPPDATA%\codex-attachment-manager`，任何时候都不提交。
-- 插件本体在 `plugin/`（`plugin/src` 是运行代码），测试和实验脚本在 `spike/`。改动运行代码后，要重新运行 `cam install`，Codex 缓存里的插件副本才会更新；不要让已安装的配置指向不存在的文件。
+- 插件本体在 `plugin/`（`plugin/src` 是运行代码），测试和实验脚本在 `spike/`，一行命令用的安装、卸载脚本在 `scripts/`。改动运行代码后，要重新运行 `cam install`，Codex 缓存里的插件副本才会更新；不要让已安装的配置指向不存在的文件。
+- `scripts/*.ps1` 只用 ASCII 字符：Windows PowerShell 5.1 用 `irm … | iex` 下载时按 Latin-1 解码，中文会乱码。
 - 仓库里的文档和代码不写用户本机的具体路径；通用位置（如 `~/.codex`、`%LOCALAPPDATA%`）可以写。
 - 先在 Windows 上开发和测试。技术栈用 TypeScript/Node。
 - 界面开发：Claude 自己截图检查效果；做到界面的关键节点时，截图给用户看，停下来等反馈再继续（用户 2026-09-24 确认）。

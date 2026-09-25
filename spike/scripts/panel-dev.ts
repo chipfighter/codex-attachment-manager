@@ -3,8 +3,10 @@
 // server code over a synthetic thread of test images (no user material).
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
 // (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
-// ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request).
-// Everything is written to a temporary folder; nothing in the user's Codex home is read or changed.
+// ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
+// does not go through the engine yet, ?demo=disable for the 停用 confirmation).
+// Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
+// read or changed, whatever is clicked.
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -22,6 +24,11 @@ const root = mkdtempSync(join(tmpdir(), "cam-panel-dev-"));
 const day = join(root, "sessions", "2026", "09", "24");
 mkdirSync(day, { recursive: true });
 process.env.CAM_DATA_DIR = join(root, "data");
+// A Codex home of its own, with the plugin installed, so 启用 / 停用 on this page never touch the real one.
+const codexHomeDir = join(root, "codex-home");
+mkdirSync(join(codexHomeDir, "plugins", "cache", "codex-attachment-manager", "codex-attachment-manager", "0.1.0"), { recursive: true });
+writeFileSync(join(codexHomeDir, "config.toml"), `model = "gpt-6-sol"\n\n[plugins."codex-attachment-manager@codex-attachment-manager"]\nenabled = true\n`);
+process.env.CODEX_HOME = codexHomeDir;
 const url = (bytes: Buffer) => `data:image/png;base64,${bytes.toString("base64")}`;
 const line = (type: string, payload: object) => `${JSON.stringify({ timestamp: "2026-09-24T10:00:00Z", type, payload })}\n`;
 const turn = (id: string) => line("event_msg", { type: "task_started", turn_id: id });
@@ -51,10 +58,11 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   turn("t4") + upload("msg_4", "t4", [["settings-screenshot.png", screenshot]]) +
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4"));
 
-const { callTool } = await import("../src/plugin-server.ts");
-const { imageSizesOf } = await import("../src/proxy.ts");
-const { recordRequest } = await import("../src/request-stats.ts");
-const { requestStatsDirOf } = await import("../src/paths.ts");
+const { callTool } = await import("../../plugin/src/plugin-server.ts");
+const { imageSizesOf } = await import("../../plugin/src/proxy.ts");
+const { recordRequest } = await import("../../plugin/src/request-stats.ts");
+const { connectDirectly, useEngine } = await import("../../plugin/src/setup.ts");
+const { requestStatsDirOf } = await import("../../plugin/src/paths.ts");
 const sessionsDir = join(root, "sessions");
 const meta = { threadId: THREAD, thread_id: THREAD };
 // Start with the red square, the copy of the blue circle and the large noise image unchecked, so both placeholder
@@ -116,12 +124,15 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
     setTimeout(() => {
       if (params.get("demo") === "pending") d.querySelector('[data-id="IMG-002"] input')?.click();
       if (params.get("demo") === "preview") d.querySelector('[data-id="IMG-004"] .thumb')?.click();
+      if (params.get("demo") === "disable") d.getElementById("disable")?.click();
     }, 700);
   }
   document.getElementById("theme").onclick = () => { theme = theme === "dark" ? "light" : "dark"; document.body.classList.toggle("dark", theme === "dark"); send({ method: "ui/notifications/host-context-changed", params: { theme } }); };
   document.getElementById("grow").onclick = () => fetch("/grow", { method: "POST" });
   // The engine statistics for this page load, then the panel.
-  fetch("/stats?kind=" + (params.get("stats") || "normal"), { method: "POST" }).then(() => { frame.src = "/panel.html"; });
+  fetch("/stats?kind=" + (params.get("stats") || "normal"), { method: "POST" })
+    .then(() => fetch("/setup?state=" + (params.get("setup") || "on"), { method: "POST" }))
+    .then(() => { frame.src = "/panel.html"; });
 </script></body></html>`;
 
 let extra = 0;
@@ -131,6 +142,11 @@ createServer((request, response) => {
   if (request.method === "GET" && request.url === "/panel.html") return reply(200, "text/html; charset=utf-8", readFileSync(join(here, "..", "..", "plugin", "src", "panel.html"), "utf8"));
   if (request.method === "POST" && request.url?.startsWith("/stats")) {
     writeStats(new URL(request.url, "http://x").searchParams.get("kind") ?? "normal");
+    return reply(200, "application/json", "{}");
+  }
+  if (request.method === "POST" && request.url?.startsWith("/setup")) {
+    // Whether the (temporary) Codex home goes through the engine when the page loads.
+    if (new URL(request.url, "http://x").searchParams.get("state") === "off") connectDirectly(); else useEngine(17891);
     return reply(200, "application/json", "{}");
   }
   if (request.method === "POST" && request.url === "/grow") {

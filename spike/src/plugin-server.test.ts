@@ -88,7 +88,7 @@ test("a stdio session lists the tools and answers calls", async () => {
   child.stdin.end();
   assert.deepEqual(replies[1].result.capabilities, { tools: {}, resources: {} });
   assert.deepEqual(replies[1].result.serverInfo.icons.map((icon: any) => [icon.theme, icon.src.slice(0, 26)]), [["light", "data:image/svg+xml;base64,"], ["dark", "data:image/svg+xml;base64,"]]);
-  assert.deepEqual(replies[2].result.tools.map((tool: any) => tool.name), ["cam_panel", "cam_set_selection", "cam_image"]);
+  assert.deepEqual(replies[2].result.tools.map((tool: any) => tool.name), ["cam_panel", "cam_set_selection", "cam_image", "cam_setup"]);
   assert.equal(replies[3].result.structuredContent.images.length, 3);
   assert.equal(replies[3].result.structuredContent.engineRunning, null, "engine supervision is off in this test");
   assert.equal(replies[4].result.isError, true);

@@ -338,7 +338,7 @@ P1 通过后，再按用户的节奏一步步探索改写。
   - 仓库根目录的 `.agents/plugins/marketplace.json` 指向它；
   - `spike/` 留测试和实验脚本。
 - **启动**：
-  - `.mcp.json` 用 `cmd.exe /d /s /c call ./scripts/launch.cmd ./src/plugin-server.ts` 启动插件服务，`launch.cmd` 优先用 Codex 自带的 Node；
+  - `.mcp.json` 用 `cmd.exe /d /s /c call ./scripts/launch.cmd ./src/plugin-server.ts` 启动插件服务，`launch.cmd` 优先用 Codex 自带的 Node（v0.1 起改成三个平台通用的 `./scripts/launch`，见第 14 节）；
   - 根目录的 `cam.cmd` 用同一个脚本运行命令行，用户不用另装 Node。
 - **数据目录**：`%LOCALAPPDATA%\codex-attachment-manager`。插件目录会在更新时被 Codex 替换，而且不往 `~/.codex` 里写。
 - **安装顺序**：
@@ -349,3 +349,52 @@ P1 通过后，再按用户的节奏一步步探索改写。
   5. 迁移旧的勾选记录，确保引擎在运行。
 - **卸载顺序**：先去掉代理设置，恢复直连；再卸插件、去掉市场。
 - **已知风险**：只在插件页面关掉插件、不运行 uninstall，Codex 会连不上，见 spec.md 第 5 节。
+
+## 14. 发布准备（v0.1）
+
+### 已查证的事实
+
+依据 Codex 的公开源码（codex-rs）、官方文档、桌面版 26.917 的前端代码，以及 CI 上 npm 版命令行 0.157.0 的实测：
+
+- **三个平台都有桌面版**：Linux 版 2026-08 起预览，包名 `chatgpt`。macOS 桌面版的命令行在 `<app>/Contents/Resources/codex`；Codex 自己的安装脚本把命令行放在 `~/.local/bin/codex`。桌面版会把 `CODEX_CLI_PATH`、`CODEX_ELECTRON_RESOURCES_PATH` 传给插件服务。
+- **插件服务怎么启动**：
+  - Windows 上用 `which` 按 PATHEXT 解析命令，所以 `./scripts/launch` 会找到 `launch.cmd`；
+  - macOS、Linux 上直接运行命令，并放进新的进程组；
+  - 插件的 `cwd` 按插件目录解析。OpenAI 自带插件也是同一套：一个无扩展名的 POSIX 脚本，加一个同名的 `.cmd`。
+- **Windows 的 Job**：插件服务在一个“关闭即结束、不许脱离”的 Job 里，它启动的引擎也在里面，服务一结束引擎就跟着结束。所以插件被移除后，Windows 上没有我们的进程还能收尾。macOS、Linux 上引擎用 `setsid` 脱离了进程组，会留下来。
+- **桌面版的插件页面能添加插件市场**：来源可以是 GitHub 仓库（`owner/repo`）、Git 地址或本地文件夹，可选 Git ref。所以用户可以完全不开终端：添加市场、装插件，再在面板里启用。
+- **Windows PowerShell 5.1**：`irm … | iex` 把 GitHub 发布文件按 Latin-1 解码，脚本里的中文会乱码，所以两个 `.ps1` 只用 ASCII。
+- **Windows 上的句柄继承**：Node 在 Windows 上启动子进程时，子进程会继承父进程可继承的句柄。所以引擎会拿着启动它的脚本的输出管道；只有测试会因此多等，用户不受影响。
+
+### 设计
+
+- **一份 `.mcp.json` 通用三个平台**：命令写 `./scripts/launch`，`scripts/launch`（POSIX，可执行位，LF）和 `scripts/launch.cmd` 按同样的顺序找 Node：
+  1. Codex 传来的路径；
+  2. 桌面版资源目录里的 `cua_node`；
+  3. primary runtime；
+  4. PATH 上 24 以上的 `node`。
+- **平台差异**：
+  - 进程检测：Windows 用 `tasklist`，其他平台用 `ps` 按可执行文件名 `codex` 统计；
+  - 系统代理：Windows 读注册表，macOS 读 `scutil --proxy`（只认 HTTP(S) 代理），Linux 只看环境变量；
+  - 数据目录：macOS 在 `~/Library/Application Support`，Linux 按 XDG。
+- **升级时替换引擎**：引擎报告 build（运行目录里 .ts 文件的哈希，换行统一成 LF）和版本。插件服务发现代码不同、版本不低，就请旧引擎退役：
+  - 旧引擎立刻停止监听，放掉空闲连接，把正在进行的请求和 WebSocket 这一轮做完再退出；
+  - 新引擎马上接手端口。
+- **启用、停用**（`setup.ts`，命令行、面板和引擎共用）：只增删带标记的块，改之前备份 config.toml，整文件写好再替换。
+  - 面板的 `cam_setup` 只接受面板的调用；
+  - 启用、停用都要重启 Codex 才生效，面板会提示。
+- **插件被移除或关掉、没先停用**：
+  - 引擎每 15 秒检查一次，判断依据只用明确的迹象：插件缓存目录不在了，或者 config.toml 写着 `enabled = false`；
+  - 连续两次，或者引擎退出前再查一次，就恢复直连；
+  - 在 Windows 上这一步通常来不及（见上面的 Job），所以面板、插件说明和 README 都写“先停用再移除”，卸载命令负责恢复。
+- **安装路径**：
+  - 插件页面：添加市场 `chipfighter/codex-attachment-manager` → 装插件 → 面板里启用 → 重启；
+  - 一行命令：`install.ps1` / `install.sh` 用 Codex 的命令行装插件，再运行装好的副本里的 `cam.ts setup`；
+  - 卸载：`uninstall.ps1` / `uninstall.sh` 不需要 Node 和插件文件，先按同样的规则去掉带标记的块，再卸插件和市场。
+- **发布**：推送 `v<版本>` 标签后，Release 工作流先在三个平台跑 CI，再核对标签和插件版本一致，然后把标签写进四个脚本，建一个草稿 Release。说明取自 CHANGELOG.md。人工看过再发布。
+  - 三个平台共用同一个插件，只有安装脚本分平台；
+  - `releases/latest/download/<脚本>` 始终指向最新的发布。
+- **验证**：
+  - `spike/src/plugin-smoke.ts`：Codex 自己的命令行装插件，app-server 开任务，插件服务就绪，引擎启动；
+  - `spike/src/scripts-smoke.ts`：真的跑安装、卸载脚本，config.toml 和 .env 恢复原样；
+  - CI 在 Windows、macOS、Linux 上都跑这两项和全部单元测试。
