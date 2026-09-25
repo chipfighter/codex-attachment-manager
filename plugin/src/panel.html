@@ -20,6 +20,8 @@
   system's). Every call tells the plugin the language, so its answers match and the text for the model follows it.
   v0.1-17: with many images, the ones the model asked for ("需要 IMG-xxx") and the user has not checked are listed in
   a bar under the request size; clicking one scrolls the list to its row and flashes the row twice.
+  v0.1-18: a checkbox at the end of a turn's line (when it has two or more images that can change) checks or
+  unchecks all of them at once, staged like single changes; it shows a dash while only some are checked.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -104,6 +106,13 @@
   .turn { display: flex; align-items: center; gap: 10px; margin: 18px 8px 6px; color: var(--text-3); font-size: 12px; font-weight: 500; }
   .turn::after { content: ""; flex: 1; height: 1px; background: var(--border); }
   .turn:first-child { margin-top: 14px; }
+  /* v0.1-18: the turn's checkbox sits after the line, in the column of the rows' checkboxes, drawn quieter than them. */
+  .turn::after { order: 1; }
+  .turn .check { flex: none; order: 2; }
+  .turn .check input:checked + .box, .turn .check input:indeterminate + .box { background: transparent; border-color: var(--text-3); }
+  .turn .check:hover .box { border-color: var(--text-2); }
+  .turn .box::after { border-color: var(--text-2); }
+  .check input:indeterminate + .box::after { opacity: 1; width: 8px; height: 0; margin-top: 0; border: 0; border-top: 2px solid var(--text-2); transform: none; }
 
   .row { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; transition: background .15s; }
   .row:hover { background: var(--bg-hover); }
@@ -282,6 +291,8 @@
       "tag.sameAs": "与 {id} 相同",
       "turn.n": "第 {n} 轮",
       "turn.earlier": "更早",
+      "turn.all": "发送第 {n} 轮的全部图片",
+      "turn.allEarlier": "发送更早的全部图片",
       "row.unnamed": "未命名",
       "row.preview": "预览 {id}",
       "row.send": "发送 {id}",
@@ -369,6 +380,8 @@
       "tag.sameAs": "Same as {id}",
       "turn.n": "Turn {n}",
       "turn.earlier": "Earlier",
+      "turn.all": "Send all images from turn {n}",
+      "turn.allEarlier": "Send all earlier images",
       "row.unnamed": "Unnamed",
       "row.preview": "Preview {id}",
       "row.send": "Send {id}",
@@ -739,6 +752,43 @@
     return row;
   }
 
+  // ---- v0.1-18: a turn's line, with one checkbox for all of its images that can change ----
+  const changeable = (image) => image.replaceable && image.inNextRequest;
+  function makeTurnLabel(turn) {
+    const label = document.createElement("div");
+    label.className = "turn";
+    label.innerHTML = '<span class="turn-name"></span><label class="check"><input type="checkbox"><span class="box"></span></label>';
+    label.querySelector(".turn-name").textContent = turn === null ? t("turn.earlier") : t("turn.n", { n: turn });
+    const all = turn === null ? t("turn.allEarlier") : t("turn.all", { n: turn });
+    label.querySelector(".check").title = all;
+    const input = label.querySelector("input");
+    input.setAttribute("aria-label", all);
+    // A click on a checked box unchecks them all; on a mixed or empty one it checks them all.
+    input.addEventListener("change", () => setTurn(turn, input.checked));
+    return label;
+  }
+  // Hidden below two images: the row's own checkbox does the same.
+  function paintTurn(label, group) {
+    const targets = group.filter(changeable);
+    const checked = targets.filter(isChecked).length;
+    const box = label.querySelector(".check");
+    box.hidden = targets.length < 2;
+    const input = box.querySelector("input");
+    input.checked = checked > 0 && checked === targets.length;
+    input.indeterminate = checked > 0 && checked < targets.length;
+    input.disabled = S.saving;
+  }
+  // Staged like single changes: blue dots, 撤销, and nothing saved before 确定.
+  function setTurn(turn, checked) {
+    if (S.saving) return;
+    for (const image of images()) {
+      if (image.turn !== turn || !changeable(image)) continue;
+      if (image.checked === checked) S.pending.delete(image.id); else S.pending.set(image.id, checked);
+    }
+    S.flash = null;
+    render();
+  }
+
   function paintThumb(row, id) {
     const button = row.querySelector(".thumb");
     const url = S.thumbs.get(id);
@@ -959,13 +1009,10 @@
     for (const image of list) {
       if (image.turn !== turn) {
         turn = image.turn;
-        if (!turnLabels.has(turn)) {
-          const label = document.createElement("div");
-          label.className = "turn";
-          label.textContent = turn === null ? t("turn.earlier") : t("turn.n", { n: turn });
-          turnLabels.set(turn, label);
-        }
-        nodes.push(turnLabels.get(turn));
+        if (!turnLabels.has(turn)) turnLabels.set(turn, makeTurnLabel(turn));
+        const label = turnLabels.get(turn);
+        paintTurn(label, list.filter((other) => other.turn === turn));
+        nodes.push(label);
       }
       let row = rows.get(image.id);
       if (!row) { row = makeRow(image.id); rows.set(image.id, row); }
