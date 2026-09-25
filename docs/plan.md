@@ -340,7 +340,7 @@ P1 通过后，再按用户的节奏一步步探索改写。
 - **启动**：
   - `.mcp.json` 用 `cmd.exe /d /s /c call ./scripts/launch.cmd ./src/plugin-server.ts` 启动插件服务，`launch.cmd` 优先用 Codex 自带的 Node（v0.1 起改成三个平台通用的 `./scripts/launch`，见第 14 节）；
   - 根目录的 `cam.cmd` 用同一个脚本运行命令行，用户不用另装 Node。
-- **数据目录**：`%LOCALAPPDATA%\codex-attachment-manager`。插件目录会在更新时被 Codex 替换，而且不往 `~/.codex` 里写。
+- **数据目录**：`%LOCALAPPDATA%\codex-attachment-manager`（v0.1-15 起改为 `%USERPROFILE%\.codex-attachment-manager`，见第 17 节）。插件目录会在更新时被 Codex 替换，而且不往 `~/.codex` 里写。
 - **安装顺序**：
   1. 检查和用户自己设置的冲突，然后备份 config.toml；
   2. 登记市场，装插件（每次都重装，让 Codex 的副本和仓库一致）；
@@ -482,3 +482,20 @@ P1 通过后，再按用户的节奏一步步探索改写。
 - **测试**：环境变量 `CAM_LANG=zh|en` 可以固定语言（测试、开发用）。断言中文措辞的测试都固定成中文：第一次推到 CI 时，这些测试在英文系统上全部失败，而且在本机也会随记下的语言变化。
 - **已知代价**：同一个任务中途切换 Codex 的语言，说明文字会变，模型那边缓存的上下文要重算一次。
 - **验证**：`v01-placeholder-selftest.ts --lang en` 用同样的五轮对话检查英文说明：模型不收回之前的回答，被问到没说过的细节时回复“need IMG-xxx”。
+
+## 17. Windows 的数据目录（v0.1-15）
+
+### 已查证的事实
+
+- Codex 桌面版和 Claude 桌面版都是微软商店的 MSIX 应用。按 Windows 的规则，这类应用启动的程序在 AppData 下新建的文件，会被转存到该应用的私有目录 `%LOCALAPPDATA%\Packages\<应用>\LocalCache\Local\…`，只有这个应用里的程序能在原路径看到它们；修改 AppData 里已有的文件则不受影响。
+- 用户 2026-09-25 的机器上实测：插件服务和它启动的引擎写的勾选记录、请求统计、语言记录都在 Codex 的私有目录里，有 6 份勾选记录只在那里；在 Claude 里跑的自测写的日志在 Claude 的私有目录里。在 Codex 外面运行的 `cam status` 看不到这些文件。
+- 后果：一行命令安装时在 Codex 外面启动的引擎，如果在用户重启 Codex 后继续被使用（重启得快时会这样），它看不到面板新写的勾选，取消的图会照样发出去，而且没有提示。
+- 用户目录本身不会被转存；Codex 自己的 `~\.codex` 就放在那里。
+
+### 设计
+
+- Windows 的数据目录改为 `%USERPROFILE%\.codex-attachment-manager`。macOS、Linux 不变。
+- 迁移（`migrate-data.ts`）：插件服务、引擎和命令行在碰数据目录之前，先检查一次；没迁移过，就从旧目录和每个应用私有目录里的副本，把勾选记录、面板切换记录、请求统计、语言记录和 config 备份复制过来，同名文件取最新的一份，并保留原来的修改时间。日志和缓存不搬，旧目录原样保留。
+  - Codex 会同时启动好几个插件服务：用一个锁文件保证只有一个在复制，其他的等它完成；锁文件超过一分钟没动，就当作复制的进程已经中断，接手重做。
+  - 设了 `CAM_DATA_DIR`（测试、开发）时不迁移。
+- `uninstall.ps1` 的配置备份也改放到新目录。

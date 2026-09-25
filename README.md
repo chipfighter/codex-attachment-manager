@@ -111,7 +111,7 @@ macOS、Linux 上，插件被移除或关掉后，引擎会自己恢复直连，
 
 ## 数据和隐私
 
-- 所有数据只留在本机的数据目录：Windows 是 `%LOCALAPPDATA%\codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 是 `~/.local/share/codex-attachment-manager`。里面有：
+- 所有数据只留在本机的数据目录：Windows 是 `%USERPROFILE%\.codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 是 `~/.local/share/codex-attachment-manager`。里面有：
   - 勾选记录；
   - 请求统计：只记大小和数量，不记内容；
   - 日志：不记对话内容和凭据；

@@ -49,7 +49,7 @@
   }
 
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
-  $dataDir = if ($env:CAM_DATA_DIR) { $env:CAM_DATA_DIR } else { Join-Path $env:LOCALAPPDATA $name }
+  $dataDir = if ($env:CAM_DATA_DIR) { $env:CAM_DATA_DIR } else { Join-Path $env:USERPROFILE ('.' + $name) }
   $config = Join-Path $codexHome 'config.toml'
   $dotenv = Join-Path $codexHome '.env'
 

@@ -25,6 +25,7 @@ import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchFo
 import { findImages, type ImageRef } from "./images.ts";
 import { isEntryPoint } from "./entry.ts";
 import { currentLang } from "./language.ts";
+import { migrateDataOnce } from "./migrate-data.ts";
 import { dataDir, pixelCacheDirOf, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
@@ -225,6 +226,7 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
 }
 
 async function main(): Promise<void> {
+  migrateDataOnce(); // v0.1-15: Windows moved the data folder
   const portIndex = process.argv.indexOf("--port");
   const port = Number(portIndex >= 0 ? process.argv[portIndex + 1] : DEFAULT_PORT);
   // One engine per machine: a second start leaves the running one alone.
