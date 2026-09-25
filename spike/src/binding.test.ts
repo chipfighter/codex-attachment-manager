@@ -4,7 +4,7 @@
 // Input: synthetic rollouts in today's folder of temporary sessions directories; output: Node test assertions only.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -68,4 +68,28 @@ test("a panel's calls follow its binding until its own thread has a rollout", ()
   startThread(sessionsDir, PANEL);
   assert.equal(resolveThread(PANEL, sessionsDir, bindings), PANEL, "its own rollout wins");
   assert.throws(() => bindThread(PANEL, "../x", bindings), /not a thread id/);
+});
+
+test("of the tasks started while the panel was on screen, the newest is offered; two started at once are both offered", () => {
+  const { sessionsDir } = dirs();
+  const now = Date.now();
+  const shown: Shown = [[now - 120_000, now]];
+  startThread(sessionsDir, USER, {}, 60_000);
+  startThread(sessionsDir, FORK.replace("c3", "d3"), {}, 5_000);
+  assert.deepEqual(newThreads(sessionsDir, shown).map((entry) => entry.threadId), [FORK.replace("c3", "d3")], "the later task wins; the panel does not ask again every few minutes");
+  startThread(sessionsDir, AUTO.replace("c5", "d5"), {}, 1_000);
+  assert.deepEqual(newThreads(sessionsDir, shown).map((entry) => entry.threadId), [FORK.replace("c3", "d3"), AUTO.replace("c5", "d5")], "started within 20 s of each other: the user picks");
+});
+
+test("binding records older than a week are dropped when a new one is written", () => {
+  const { sessionsDir, bindings } = dirs();
+  startThread(sessionsDir, USER);
+  mkdirSync(bindings, { recursive: true });
+  const stale = join(bindings, "01a0d301-0000-7000-8000-00000000aaaa.json");
+  const recent = join(bindings, "01a0d301-0000-7000-8000-00000000bbbb.json");
+  for (const file of [stale, recent]) writeFileSync(file, JSON.stringify({ threadId: USER, at: "2026-09-01T00:00:00Z" }));
+  const eightDaysAgo = new Date(Date.now() - 8 * 86_400_000);
+  utimesSync(stale, eightDaysAgo, eightDaysAgo);
+  bindThread(PANEL, USER, bindings);
+  assert.deepEqual([existsSync(stale), existsSync(recent), existsSync(join(bindings, `${PANEL}.json`))], [false, true, true]);
 });

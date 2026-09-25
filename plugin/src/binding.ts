@@ -2,10 +2,13 @@
 // Codex may drop for a new one when the message is sent; the panel keeps asking about the prepared one (v0.1-8).
 // Here: which threads the user just started (for the panel to switch to), and which thread such a panel was switched
 // to, so every later call from that tab is about the new thread.
+// v0.1-16 — Codex hands such a panel a freshly prepared thread every few minutes, so the panel is offered its task again
+// each time: only the newest thread started while it was on screen counts (and any started within 20 s of it, which
+// the user picks from), and binding records older than a week are dropped.
 // Input: the sessions directory (read-only) and the tool's data directory.
 // Output: <data dir>/bindings/<the panel's thread id>.json = { "threadId": "<the thread it shows>", "at": "…" }.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bindingsDirOf } from "./paths.ts";
 import { hasRollout, threadsStartedSince } from "./thread-index.ts";
@@ -31,7 +34,10 @@ export function isUserThread(meta: Json | null): boolean {
 // seconds, so a thread started up to 5 s after the last note still counts (the user sent and left at once).
 export type Shown = Array<[number, number]>;
 export const LEFT_AT_ONCE_MS = 5_000;
+// Threads that started this close to the newest one started "at once" (e.g. two windows): the user picks.
+export const SAME_MOMENT_MS = 20_000;
 const MAX_PERIODS = 20;
+const KEEP_BINDINGS_MS = 7 * 86_400_000;
 
 export function newThreads(sessionsDir: string, shown: unknown): Array<{ threadId: string; startedAt: number }> {
   const periods = (Array.isArray(shown) ? shown : [])
@@ -39,9 +45,11 @@ export function newThreads(sessionsDir: string, shown: unknown): Array<{ threadI
     .slice(-MAX_PERIODS);
   if (!periods.length) return [];
   const since = Math.min(...periods.map(([from]) => from));
-  return threadsStartedSince(sessionsDir, since)
-    .filter((entry) => isUserThread(entry.meta) && periods.some(([from, to]) => entry.startedAt >= from && entry.startedAt <= to + LEFT_AT_ONCE_MS))
-    .map(({ threadId, startedAt }) => ({ threadId, startedAt }));
+  const started = threadsStartedSince(sessionsDir, since)
+    .filter((entry) => isUserThread(entry.meta) && periods.some(([from, to]) => entry.startedAt >= from && entry.startedAt <= to + LEFT_AT_ONCE_MS));
+  // Oldest first: the newest is last. A task started earlier on this page is not offered once a newer one exists.
+  const newest = started.at(-1)?.startedAt ?? 0;
+  return started.filter((entry) => newest - entry.startedAt <= SAME_MOMENT_MS).map(({ threadId, startedAt }) => ({ threadId, startedAt }));
 }
 
 export function boundThread(threadId: string, dir = bindingsDirOf()): string | null {
@@ -63,6 +71,11 @@ export function bindThread(threadId: string, target: string, dir = bindingsDirOf
   writeFileSync(`${file}.tmp`, JSON.stringify({ threadId: target, at: new Date().toISOString() }));
   renameSync(`${file}.tmp`, file);
   known.set(`${dir}|${threadId}`, target);
+  // One record is written each time Codex hands the panel a new prepared thread; a week is plenty.
+  for (const name of readdirSync(dir)) {
+    const old = join(dir, name);
+    try { if (name.endsWith(".json") && Date.now() - statSync(old).mtimeMs > KEEP_BINDINGS_MS) rmSync(old, { force: true }); } catch { /* gone meanwhile */ }
+  }
 }
 
 // The thread a panel's call is about: the panel's own once that has a rollout, otherwise the one it was switched to.
