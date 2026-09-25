@@ -6,7 +6,8 @@
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
 // does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout;
 // with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once;
-// ?thread=gap for a fork whose original task was deleted, v0.1-13; ?lang=en for Codex in English, v0.1-14).
+// ?thread=gap for a fork whose original task was deleted, v0.1-13; ?lang=en for Codex in English, v0.1-14;
+// ?thread=many for a task with 45 images whose last reply asks for two unchecked ones, v0.1-17).
 // The demo task has a name, as if the user had renamed it in Codex (v0.1-9).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
@@ -67,8 +68,33 @@ writeFileSync(join(day, `rollout-2026-09-24T11-00-00-${GAP}.jsonl`),
   line("session_meta", { id: GAP, forked_from_id: "01a0d301-0000-7000-8000-00000000dead", history_base: { thread_id: "01a0d301-0000-7000-8000-00000000dead", end_byte_offset: 4096 } }) +
   turn("g1") + upload("msg_g1", "g1", [["after-fork.png", sunset]]));
 
-// Its name, as Codex keeps it next to the sessions folder (the panel's title).
+// ?thread=many: 45 images over 11 turns; two large ones (about 3 MB each) are unchecked and the last reply asks for them.
+const MANY = `${THREAD.slice(0, -4)}a045`;
+const noiseOf = (seed: number) => {
+  let state = seed;
+  const next = () => { state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return state & 0xff; };
+  return png(1024, 1024, () => [next(), next(), next()]);
+};
+let shot = 0;
+const photo = (): [string, Buffer] => {
+  const n = ++shot;
+  if (n === 17 || n === 32) return [`scan-${n}.png`, noiseOf(n * 0x9e3779b1)];
+  const [r, g, b] = [(n * 53) % 200 + 40, (n * 97) % 200 + 40, (n * 151) % 200 + 40];
+  return [`product-${String(n).padStart(2, "0")}.png`, png(480, 320, (x, y) => {
+    const inside = [(x - 240) ** 2 + (y - 160) ** 2 < 90 ** 2, Math.abs(x - 240) < 90 && Math.abs(y - 160) < 90, (x + y) % 60 < 30, y > 60 && y < 260 && Math.abs(x - 240) < (y - 60) * 0.6][n % 4];
+    return inside ? [255 - r, 255 - g, 255 - b] : [r, g, b];
+  })];
+};
+let manyLog = line("session_meta", { id: MANY });
+[5, 4, 4, 5, 3, 4, 5, 4, 4, 4, 3].forEach((count, index) => {
+  const id = `m${index + 1}`;
+  manyLog += turn(id) + upload(`msg_${id}`, id, Array.from({ length: count }, photo)) + say(index === 10 ? "需要 IMG-017 和 IMG-032 才能比较这两版。" : "收到。", id);
+});
+writeFileSync(join(day, `rollout-2026-09-24T12-00-00-${MANY}.jsonl`), manyLog);
+
+// Their names, as Codex keeps them next to the sessions folder (the panel's title).
 writeFileSync(join(root, "session_index.jsonl"), `${JSON.stringify({ id: THREAD, thread_name: "海报配色调整", updated_at: "2026-09-24T10:00:00Z" })}
+${JSON.stringify({ id: MANY, thread_name: "产品图批量修图", updated_at: "2026-09-24T12:00:00Z" })}
 `);
 
 // New tasks the user starts after opening the panel on a new chat (?newtask=): Codex files them in today's folder.
@@ -100,6 +126,8 @@ const meta = { threadId: THREAD, thread_id: THREAD };
 // Start with the red square, the copy of the blue circle and the large noise image unchecked, so both placeholder
 // kinds and a visible saving show.
 callTool("cam_set_selection", { uncheck: ["IMG-001", "IMG-005", "IMG-006"] }, meta, sessionsDir);
+const manyMeta = { threadId: MANY, thread_id: MANY };
+callTool("cam_set_selection", { uncheck: ["IMG-005", "IMG-012", "IMG-017", "IMG-024", "IMG-032", "IMG-040"] }, manyMeta, sessionsDir);
 
 // What the engine would have recorded: the last full request came in turn 3 (turn 4's images are new since) and had
 // IMG-001, IMG-005 and IMG-006 replaced. ?stats=skipped|websocket|none shows the other cases.
@@ -145,7 +173,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
   // Each page load gets a thread of its own, so a switch made on an earlier load does not carry over.
   const fresh = params.get("thread") === "fresh" ? Math.random().toString(16).slice(2, 6).padEnd(4, "0") : null;
-  const query = fresh ? "?fresh=" + fresh : params.get("thread") === "gap" ? "?gap=1" : "";
+  const query = fresh ? "?fresh=" + fresh : params.get("thread") === "gap" ? "?gap=1" : params.get("thread") === "many" ? "?many=1" : "";
   const call = (name, args) => fetch("/call" + query, { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
   window.addEventListener("message", async (event) => {
     const m = event.data;
@@ -208,7 +236,8 @@ createServer((request, response) => {
       const { name, arguments: args } = JSON.parse(body);
       const freshId = `${THREAD.slice(0, -4)}${fresh}`;
       const gap = new URL(request.url, "http://x").searchParams.has("gap");
-      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : gap ? { threadId: GAP, thread_id: GAP } : meta;
+      const many = new URL(request.url, "http://x").searchParams.has("many");
+      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : gap ? { threadId: GAP, thread_id: GAP } : many ? manyMeta : meta;
       try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, threadMeta, sessionsDir))); }
       catch (error) { reply(200, "application/json", JSON.stringify({ isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })); }
     });
