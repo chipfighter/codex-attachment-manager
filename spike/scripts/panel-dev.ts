@@ -128,7 +128,7 @@ let extra = 0;
 createServer((request, response) => {
   const reply = (status: number, type: string, body: string) => { response.writeHead(status, { "content-type": type, "cache-control": "no-store" }); response.end(body); };
   if (request.method === "GET" && (request.url === "/" || request.url?.startsWith("/?"))) return reply(200, "text/html; charset=utf-8", HOST);
-  if (request.method === "GET" && request.url === "/panel.html") return reply(200, "text/html; charset=utf-8", readFileSync(join(here, "..", "src", "panel.html"), "utf8"));
+  if (request.method === "GET" && request.url === "/panel.html") return reply(200, "text/html; charset=utf-8", readFileSync(join(here, "..", "..", "plugin", "src", "panel.html"), "utf8"));
   if (request.method === "POST" && request.url?.startsWith("/stats")) {
     writeStats(new URL(request.url, "http://x").searchParams.get("kind") ?? "normal");
     return reply(200, "application/json", "{}");

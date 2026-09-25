@@ -3,8 +3,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findImages, type ImageRef } from "./images.ts";
-import { rewriteItems, type Described } from "./rewrite.ts";
+import { findImages, type ImageRef } from "../../plugin/src/images.ts";
+import { rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
 import { png } from "./testkit.ts";
 
 const url = (bytes: Buffer) => `data:image/png;base64,${bytes.toString("base64")}`;

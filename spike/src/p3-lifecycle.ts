@@ -8,9 +8,9 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex } from "./appserver.ts";
-import { engineHealth } from "./engine.ts";
-import { SERVER_NAME } from "./install.ts";
-import { dataDir } from "./paths.ts";
+import { engineHealth } from "../../plugin/src/engine.ts";
+import { SERVER_NAME } from "../../plugin/src/install.ts";
+import { dataDir } from "../../plugin/src/paths.ts";
 import { TEST_MODEL } from "./testkit.ts";
 
 type Json = Record<string, any>;
@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   const server = new AppServer(findBundledCodex(), [
     "-c", `mcp_servers.${SERVER_NAME}.command=${JSON.stringify(process.execPath)}`,
-    "-c", `mcp_servers.${SERVER_NAME}.args=${JSON.stringify([join(here, "plugin-server.ts")])}`,
+    "-c", `mcp_servers.${SERVER_NAME}.args=${JSON.stringify([join(here, "..", "..", "plugin", "src", "plugin-server.ts")])}`,
   ], { NO_PROXY: undefined, no_proxy: undefined }, join(dataDir(), "logs", `p3-lifecycle-${startedAt.replaceAll(":", "-")}.log`));
   try {
     await server.initialize();

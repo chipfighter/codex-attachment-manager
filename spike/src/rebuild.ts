@@ -13,7 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex, type Notification } from "./appserver.ts";
 import { baseName, buildMigration, type AssetInfo } from "./migrate.ts";
-import { decodePng } from "./png.ts";
+import { decodePng } from "../../plugin/src/png.ts";
 
 type Json = Record<string, any>;
 const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");

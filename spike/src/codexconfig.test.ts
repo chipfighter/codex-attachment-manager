@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { coversLoopback, disableMcpServer, disableProxy, enableMcpServer, enableNoProxy, enableProxy, noProxyStatus, noProxyValue, proxyStatus } from "./codexconfig.ts";
+import { coversLoopback, disableMcpServer, disableProxy, enableMcpServer, enableNoProxy, enableProxy, noProxyStatus, noProxyValue, proxyStatus } from "../../plugin/src/codexconfig.ts";
 
 const URL = "http://localhost:17891/backend-api/codex";
 const withFeatures = 'model = "gpt-6-sol"\n\n[features]\nview_image = true\n\n[mcp_servers.demo]\ncommand = "node"\n';

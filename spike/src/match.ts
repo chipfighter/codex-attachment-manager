@@ -7,7 +7,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, sta
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { decodePng, type DecodedPng } from "./png.ts";
+import { decodePng, type DecodedPng } from "../../plugin/src/png.ts";
 
 type Json = Record<string, any>;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");

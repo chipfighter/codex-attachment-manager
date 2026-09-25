@@ -7,7 +7,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadThreadIndex } from "./thread-index.ts";
+import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
 import { png } from "./testkit.ts";
 
 const THREAD = "01a0d301-0000-7000-8000-000000000001";

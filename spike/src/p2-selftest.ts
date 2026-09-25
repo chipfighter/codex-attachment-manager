@@ -10,10 +10,10 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex } from "./appserver.ts";
-import { codexHome } from "./codexconfig.ts";
-import { readSelection, writeSelection } from "./selection.ts";
+import { codexHome } from "../../plugin/src/codexconfig.ts";
+import { readSelection, writeSelection } from "../../plugin/src/selection.ts";
 import { runTurn, TEST_MODEL, testImages, text } from "./testkit.ts";
-import { loadThreadIndex } from "./thread-index.ts";
+import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
 
 type Json = Record<string, any>;
 const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");

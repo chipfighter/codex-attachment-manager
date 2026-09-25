@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { callTool, fromModel, PANEL_MIME, PANEL_URI, readResource, threadOf, TOOLS } from "./plugin-server.ts";
+import { callTool, fromModel, PANEL_MIME, PANEL_URI, readResource, threadOf, TOOLS } from "../../plugin/src/plugin-server.ts";
 import { sampleSessions, THREAD } from "./testfixtures.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -62,7 +62,7 @@ test("image data stays in _meta, out of the model-visible content", () => {
 
 test("a stdio session lists the tools and answers calls", async () => {
   const { sessionsDir, dataRoot } = sampleSessions();
-  const child = spawn(process.execPath, [join(here, "plugin-server.ts")], { env: { ...process.env, CAM_NO_ENGINE: "1", CAM_DATA_DIR: dataRoot, CODEX_HOME: dirname(sessionsDir) }, stdio: ["pipe", "pipe", "inherit"] });
+  const child = spawn(process.execPath, [join(here, "..", "..", "plugin", "src", "plugin-server.ts")], { env: { ...process.env, CAM_NO_ENGINE: "1", CAM_DATA_DIR: dataRoot, CODEX_HOME: dirname(sessionsDir) }, stdio: ["pipe", "pipe", "inherit"] });
   const replies: Record<number, any> = {};
   let buffer = "";
   child.stdout.on("data", (chunk: Buffer) => {

@@ -2,21 +2,36 @@
 
 > 方法见 [plan.md](plan.md)。按顺序做，完成一项勾一项，并写明证据放在哪里。
 
-## 当前：界面 P4（已完成），打包 P5
+## 当前：打包 P5
 
-设计见 plan.md 第 12 节，结果见 `docs/p4-report.md`。测试时调用模型一律用 `gpt-6-sol`，推理强度 `low`。
+设计见 plan.md 第 13 节。测试时调用模型一律用 `gpt-6-sol`，推理强度 `low`。
+
+- [x] **面板补充：发送预览和改写失败提示**（2026-09-25，用户要求；spec.md 第 4 节“首版”第 4、6 条）
+  - 引擎分开记“最近一次事件”和“最近一次完整请求”（带每张图的大小），WebSocket 在取消后仍在传数据时记一笔（`plugin/src/request-stats.ts`、`proxy.ts`）。
+  - 面板顶部：下一条消息发送几张、占位几张，预计请求大小和全部发送的对比，上一次请求实际少发多少；两类提示（`panel-state.ts`、`panel.html`）。新增 4 个单元测试。
+- [x] **P5-1 查证插件格式和安装方式**：插件清单、`.mcp.json`、插件市场清单、Codex 命令行的 `plugin marketplace add` / `plugin add` / `plugin remove`、插件缓存位置、Codex 自带的 Node 24（结果见 plan.md 第 13 节）。
+- [x] **P5-2 打包**：运行代码搬进 `plugin/src`；`plugin/.codex-plugin/plugin.json`（名称、说明、图标）、`.mcp.json`、`scripts/launch.cmd`；仓库根目录的 `.agents/plugins/marketplace.json`；`cam.cmd` 不用另装 Node 就能运行命令行。
+- [x] **P5-3 安装和卸载改成插件方式**（`cam.ts`、`install.ts`、`codexcli.ts`；共 79 个单元测试）
+  - install：检查冲突 → 备份 → 登记市场 → 装插件 → 自检装好的副本 → 写代理设置 → 迁移旧勾选 → 确保引擎在运行。
+  - uninstall：先恢复直连，再卸插件、去掉市场。数据目录改到 `%LOCALAPPDATA%\codex-attachment-manager`。
+  - 2026-09-25 在用户机器上安装成功：插件进了 Codex 缓存，自检通过，旧版写的服务块已去掉，迁移了 6 份勾选记录。
+- [x] **P5-4 README**：用途、原理、安装、使用、卸载（强调要用 `cam uninstall`）、限制、数据和隐私、开发。
+- [ ] **P5-5 桌面版端到端验证**【需用户】：重启 Codex → 插件页面能看到插件 → 从侧边面板打开面板、看发送预览 → 取消一张图再问一次 → 日志确认插件服务从 Codex 的缓存启动、引擎由它拉起。
+
+---
+
+## 已完成：界面 P4
+
+设计见 plan.md 第 12 节，结果见 `docs/p4-report.md`。
 
 - [x] **P4-1 找入口**（2026-09-24；依据：桌面版 26.917 的前端代码）：工具在 `_meta["openai/ui"].entrypoints` 里声明 `thread` 入口后，面板出现在右侧侧边面板“新建标签页 → 插件和 MCP”里，用户手动打开，不经过模型；打开后桌面版用当前任务的编号调用工具。标题栏没有给插件的入口，所以不做外挂窗口。
-- [x] **P4-2 面板**（`spike/src/panel.html`，`plugin-server.ts` 的 `cam_panel` / `cam_image`，`panel-state.ts`；开发页 `spike/scripts/panel-dev.ts`；新增 3 个单元测试，共 73 个）
+- [x] **P4-2 面板**（`panel.html`，`plugin-server.ts` 的 `cam_panel` / `cam_image`，`panel-state.ts`，P5 起都在 `plugin/src`；开发页 `spike/scripts/panel-dev.ts`；新增 3 个单元测试，共 73 个）
   - 按轮次列出任务历史里的图片，缩略图、编号、名称、来源、尺寸、大小；点缩略图放大预览；勾选先暂存，点“确定”才保存。
   - 标出“不发送”、“由 IMG-xxx 代替”、“与 IMG-xxx 相同”、“模型需要这张”、“无法取消”；代理没在运行时提示。
   - 主题、字体、配色跟随 Codex；每 3 秒刷新，新图自动出现。
 - [x] **P4-3 桌面版实测**【需用户】（2026-09-24 通过；证据：`local/plugin-server.jsonl`、`local/proxy/2026-09-24.jsonl`、用户截图；结果见 `docs/p4-report.md`）
   - 从“插件和 MCP”打开面板，数据、缩略图、主题都对；面板的调用没有写进聊天记录。
   - 预览、勾上 a.png、点“确定”后，下一次请求带上两张图、不做替换，模型答出了 a.png 的背景、形状和角标。
-- [ ] **P5 打包成插件、写说明，桌面版端到端验证**【需用户】。
-- 未定：面板上的“本轮将发送什么”完整预览（取消前后的请求大小对比）和“改写不了时在面板上提示”（spec.md 第 4 节“首版”第 4、6 条），做不做、什么时候做，之后再定。
-
 ---
 
 ## 已完成：核心完善 P3
