@@ -10,8 +10,9 @@
   Input: the MCP Apps bridge (postMessage) — Codex's call of cam_panel, and our own calls of cam_panel, cam_image and
   cam_set_selection. Output: selection changes through cam_set_selection. Self-contained: no network, no storage.
   v0.1-5 — 启用插件 / 停用插件 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
-  The state is polled, and also re-read whenever the user moves to or touches the panel, or presses 刷新: the host may
-  slow or pause the timers of a panel it thinks is in the background.
+  The state is polled, and also re-read whenever the user moves to or touches the panel, or presses 刷新.
+  v0.1-8 — a panel opened on a new chat before its first message may stay tied to a thread Codex prepared and then
+  replaced; it cannot follow the new one, so it says to reopen.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -75,8 +76,6 @@
   .plugin .on:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
   .plugin .off { border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent); background: transparent; color: var(--danger); }
   .plugin .off:hover:not(:disabled) { background: var(--danger-bg); }
-  .plugin .off.confirming { border-color: var(--danger); background: var(--danger); color: var(--bg); }
-  .plugin .off.confirming:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 86%, var(--text)); }
   .plan { margin-top: 4px; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .plan b { font-weight: 600; color: var(--text); }
   .meter { margin-top: 12px; padding: 10px 12px 11px; border-radius: 12px; background: var(--bg-soft); }
@@ -270,7 +269,6 @@
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
-    confirmDisable: false,         // 停用插件 was clicked once and waits for the second click
     switching: false,              // a 启用插件 / 停用插件 call is under way
     manual: false,                 // the running refresh was asked for with the 刷新 button
   };
@@ -353,7 +351,6 @@
     S.switching = true; render();
     try {
       const result = await callTool("cam_setup", { enable });
-      S.confirmDisable = false;
       ingest(result.structuredContent);
     } catch (error) {
       S.error = (enable ? "启用失败：" : "停用失败：") + error.message;
@@ -548,36 +545,27 @@
   function setupNotices() {
     const setup = S.data?.setup;
     if (!setup) return [];
-    if (S.confirmDisable && setup.usesEngine) return [notice("warn", "停用后，Codex 下次启动时恢复直连，取消勾选的图会照常发送。卸载插件前请先停用。确认停用，请再点一次右上角的“停用插件”；点“启用插件”则保持启用。")];
     if (setup.changed === "enabled") return [notice("info", "已启用。重启 Codex 后生效，取消勾选的图就不再发送了。")];
     if (setup.changed === "disabled") return [notice("warn", "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。")];
-    if (!setup.usesEngine) return [notice("info", "还没有接入 Codex：点右上角的“启用插件”，然后重启 Codex，取消勾选才会生效。")];
+    if (!setup.usesEngine) return [notice("info", "插件没有启用：Codex 现在直连，取消勾选不会生效。点右上角的“启用插件”，然后重启 Codex。")];
     return [];
   }
 
-  // 启用插件 / 停用插件 sit in the header. 停用 asks for a second click on the same spot; 启用插件 next to it keeps
-  // the plugin on. Rebuilt only when the choice changes, so hover and focus survive the polling.
+  // 启用插件 / 停用插件 in the header switch at once (user 2026-09-25): the notice says a restart is due, and the
+  // other button undoes it. Rebuilt only when the choice changes, so hover and focus survive the polling.
   let pluginKey = "";
   function renderPlugin() {
     const setup = S.data?.setup;
-    const key = !setup ? "" : !setup.usesEngine ? "off" : S.confirmDisable ? "confirm" : "on";
+    const key = !setup ? "" : setup.usesEngine ? "on" : "off";
     const box = $("plugin");
     if (key !== pluginKey) {
       pluginKey = key;
-      const make = (label, className, run) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = label;
-        button.className = className;
-        button.addEventListener("click", run);
-        return button;
-      };
-      const keepOn = () => { S.confirmDisable = false; render(); };
-      const askToDisable = () => { S.confirmDisable = true; render(); main.scrollTo({ top: 0 }); };
-      box.replaceChildren(...(key === "on" ? [make("停用插件", "off", askToDisable)]
-        : key === "confirm" ? [make("启用插件", "on", keepOn), make("停用插件", "off confirming", () => switchEngine(false))]
-        : key === "off" ? [make("启用插件", "on", () => switchEngine(true))]
-        : []));
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = key === "on" ? "停用插件" : "启用插件";
+      button.className = key === "on" ? "off" : "on";
+      button.addEventListener("click", () => switchEngine(key !== "on"));
+      box.replaceChildren(...(key ? [button] : []));
     }
     for (const button of box.children) button.disabled = S.switching;
   }
@@ -594,6 +582,7 @@
     const nodes = [];
     if (S.error) nodes.push(notice("error", S.error, { label: "重试", run: () => { S.error = null; render(); refresh(); } }));
     nodes.push(...setupNotices());
+    if (S.data?.started === false) nodes.push(notice("info", "这个任务还没开始。发出第一条消息后，如果这里没有出现图片，请关掉这个标签页，再从“插件和 MCP”里打开一次：Codex 有时会给新任务换一个编号，已经打开的面板跟不上。"));
     if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
     const sendNotice = S.data?.send?.notice;
     if (sendNotice?.kind === "skipped") nodes.push(notice("error", `上一次请求（${timeOf(sendNotice.at)}）没能按勾选替换，图片原样发给了模型。原因：${sendNotice.reason}。`));
@@ -685,11 +674,7 @@
   $("viewerClose").addEventListener("click", closeViewer);
   $("viewerStage").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeViewer(); });
   $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    if (S.viewer) closeViewer();
-    else if (S.confirmDisable) { S.confirmDisable = false; render(); }
-  });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
   $("undo").addEventListener("click", () => { S.pending.clear(); render(); });
   $("refresh").addEventListener("click", () => refresh(true));
   $("confirm").addEventListener("click", confirm);
