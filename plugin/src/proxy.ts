@@ -3,6 +3,7 @@
 // machine, exits once no Codex process is left, and keeps per-thread statistics of the latest request.
 // P4: the statistics also name the images each full request carried (the panel's size baseline), and note a
 // WebSocket turn that kept running after images were unchecked (it cannot be rewritten).
+// v0.1-3: reports its build and version; POST /__cam/retire hands the port to a newer engine (see engine.ts).
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
@@ -16,11 +17,11 @@ import net from "node:net";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
-import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { codexHome } from "./codexconfig.ts";
-import { DEFAULT_PORT, ENGINE_SERVICE, engineHealth, watchForCodex } from "./engine.ts";
+import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
+import { isEntryPoint } from "./entry.ts";
 import { dataDir, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
@@ -234,8 +235,11 @@ async function main(): Promise<void> {
   const sessionsDir = join(codexHome(), "sessions");
   const via = outboundProxy();
   const startedAt = new Date().toISOString();
+  // v0.1-3: which code this engine runs, so the plugin can tell when an update needs a new engine.
+  const build = buildOf();
+  const version = versionOf();
   let sequence = 0;
-  log({ at: startedAt, event: "engine-start", pid: process.pid, port });
+  log({ at: startedAt, event: "engine-start", pid: process.pid, port, build, version });
   if (!process.argv.includes("--stay")) {
     watchForCodex(() => {
       log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: "no Codex process left" });
@@ -246,6 +250,30 @@ async function main(): Promise<void> {
   // so a thread with unchecked images must move to HTTP: its idle connections are closed, and its next upgrade gets 426.
   type Live = { client: Duplex; socket: tls.TLSSocket; last: number; closedForSelection: boolean; activeWhileUnchecked: boolean; path: string; identity: Json };
   const live = new Map<string, Set<Live>>();
+  // v0.1-3: a newer plugin's engine takes over. This one stops listening at once, lets idle connections go (Codex
+  // reconnects to the new engine), keeps serving requests and WebSocket turns already under way, then exits.
+  const servers: http.Server[] = [];
+  const sockets = new Set<Live>();
+  let inFlight = 0;
+  let retiredAt: number | null = null;
+  const retire = (by: string) => {
+    if (retiredAt !== null) return;
+    retiredAt = Date.now();
+    log({ at: new Date().toISOString(), event: "engine-retire", pid: process.pid, build, by: by || null });
+    for (const server of servers) { server.close(); server.closeIdleConnections(); }
+    setInterval(() => {
+      for (const connection of sockets) {
+        if (Date.now() - connection.last < 1500) continue;
+        connection.socket.destroy();
+        connection.client.destroy();
+      }
+      for (const server of servers) server.closeIdleConnections();
+      const done = inFlight === 0 && sockets.size === 0;
+      if (!done && Date.now() - retiredAt! < 10 * 60_000) return;
+      log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: done ? "replaced by a newer engine" : "replaced by a newer engine; connections still open after 10 minutes were dropped" });
+      process.exit(0);
+    }, 250);
+  };
   setInterval(() => {
     for (const [threadId, connections] of live) {
       if (!hasUnchecked(threadId)) continue;
@@ -268,9 +296,19 @@ async function main(): Promise<void> {
   const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/__cam/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, service: ENGINE_SERVICE, pid: process.pid, startedAt, port, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
+      res.end(JSON.stringify({ ok: true, service: ENGINE_SERVICE, pid: process.pid, startedAt, port, build, version, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
       return;
     }
+    if (req.url === "/__cam/retire" && req.method === "POST") {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ retiring: true, pid: process.pid }));
+      retire(String(req.headers["x-cam-build"] ?? ""));
+      return;
+    }
+    inFlight++;
+    res.on("close", () => { inFlight--; });
+    // Once retired, no connection stays open for a next request.
+    if (retiredAt !== null) res.shouldKeepAlive = false;
     const id = ++sequence;
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
@@ -350,6 +388,11 @@ async function main(): Promise<void> {
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
     const identity = requestIdentity(req.headers);
+    // A retired engine takes no new WebSocket; Codex opens it again, on the new engine.
+    if (retiredAt !== null) {
+      client.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
     if (/\/responses$/.test(path) && (forceHttp || hasUnchecked(identity.threadId))) {
       client.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
       log({ at: new Date(started).toISOString(), id, transport: "websocket", path, declined: 426, reason: forceHttp ? "--force-http" : "thread has unchecked images", ...identity });
@@ -360,6 +403,7 @@ async function main(): Promise<void> {
     let upstreamStatus: string | null = null;
     connectUpstream(via).then((socket) => {
       const connection: Live = { client, socket, last: Date.now(), closedForSelection: false, activeWhileUnchecked: false, path, identity };
+      sockets.add(connection);
       if (identity.threadId) {
         if (!live.has(identity.threadId)) live.set(identity.threadId, new Set());
         live.get(identity.threadId)!.add(connection);
@@ -386,6 +430,7 @@ async function main(): Promise<void> {
         logged = true;
         socket.destroy();
         client.destroy();
+        sockets.delete(connection);
         if (identity.threadId) live.get(identity.threadId)?.delete(connection);
         const entry = { at: new Date(started).toISOString(), id, transport: "websocket", path, upstreamStatus, upBytes: up, downBytes: down, ms: Date.now() - started, closedForSelection: connection.closedForSelection, activeWhileUnchecked: connection.activeWhileUnchecked, ...identity };
         log(entry);
@@ -401,23 +446,31 @@ async function main(): Promise<void> {
     });
   };
 
-  // Codex may resolve "localhost" to either loopback address, so listen on both (and only on loopback).
-  for (const host of ["127.0.0.1", "::1"]) {
+  // Codex may resolve "localhost" to either loopback address, so listen on both (and only on loopback), one after the
+  // other: an engine that loses a start race never holds half of the port. A busy port is tried again for a few
+  // seconds, since an engine retiring for this one may still be letting go of it.
+  const listen = (host: string, attempt = 0): Promise<boolean> => new Promise((resolve) => {
     const server = http.createServer(onRequest);
     server.on("upgrade", onUpgrade);
     server.requestTimeout = 0;
-    server.on("error", (error: NodeJS.ErrnoException) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE" && attempt < 20) { setTimeout(() => resolve(listen(host, attempt + 1)), 150); return; }
       console.error(JSON.stringify({ host, error: String(error) }));
-      // Another program holds the port (or a second engine won a race): this one must not run half-bound.
-      if (error.code === "EADDRINUSE") {
-        log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: `port ${port} in use on ${host}` });
-        process.exit(1);
-      }
+      // Loopback IPv6 may be missing; that is fine. A port another program holds is not.
+      resolve(error.code !== "EADDRINUSE");
     });
     server.listen(port, host, () => {
+      servers.push(server);
+      server.on("error", (error) => console.error(JSON.stringify({ host, error: String(error) })));
       console.log(JSON.stringify({ listening: `http://${host.includes(":") ? `[${host}]` : host}:${port}/backend-api/codex`, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
+      resolve(true);
     });
+  });
+  for (const host of ["127.0.0.1", "::1"]) {
+    if (await listen(host)) continue;
+    log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: `port ${port} in use on ${host}` });
+    process.exit(1);
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isEntryPoint(import.meta.url)) await main();

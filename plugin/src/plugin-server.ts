@@ -1,5 +1,6 @@
 // Purpose: P3-3 — the plugin's MCP server, started by Codex for each session. It keeps the engine (local proxy)
-// running — at start and every 3 seconds, so a crashed engine comes back — and serves the panel's data tools:
+// running — at start and every 3 seconds, so a crashed engine comes back, and since v0.1-3 an engine left over from an
+// older plugin version is replaced — and serves the panel's data tools:
 // the thread's images and their state, check/uncheck, and the images themselves.
 // Only the user may check or uncheck: calls the model makes (they carry Codex's turn metadata) are refused.
 // P4 — the panel page itself (an MCP App resource). cam_panel declares a "thread" entrypoint, so Codex lists the panel
@@ -10,9 +11,10 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { codexHome } from "./codexconfig.ts";
 import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
+import { isEntryPoint } from "./entry.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir } from "./paths.ts";
 
@@ -111,7 +113,8 @@ function main(): void {
   const supervise = async () => {
     if (process.env.CAM_NO_ENGINE === "1") return;
     const result = await ensureEngine({ port });
-    if (result.state !== "running" || engineState !== "running") log({ event: "engine", state: result.state, enginePid: result.health?.pid ?? null });
+    const replaced = result.replaced ? { replacedPid: result.replaced.pid, replacedBuild: result.replaced.build ?? null } : {};
+    if (result.state !== "running" || engineState !== "running") log({ event: "engine", state: result.state, enginePid: result.health?.pid ?? null, build: result.health?.build ?? null, ...replaced });
     engineState = result.state;
     engineRunning = result.state !== "failed";
   };
@@ -159,4 +162,4 @@ function main(): void {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (isEntryPoint(import.meta.url)) main();
