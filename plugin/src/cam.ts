@@ -22,6 +22,7 @@ import { buildOf, DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
 import { storedLang, systemLang } from "./language.ts";
 import { say, type MessageKey } from "./messages.ts";
+import { migrateDataOnce } from "./migrate-data.ts";
 import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, pluginStatus } from "./install.ts";
 import { applySelection, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir, selectionDirOf } from "./paths.ts";
@@ -135,6 +136,7 @@ function migrateSelections(): number {
 }
 
 async function main(): Promise<void> {
+  migrateDataOnce(); // v0.1-15: Windows moved the data folder
   const [command, threadId, ...ids] = process.argv.slice(2);
   // The same port the plugin's MCP server uses: --port, else CAM_ENGINE_PORT, else the default.
   const port = Number(process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);

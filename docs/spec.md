@@ -98,7 +98,7 @@
   - 官方 app-server 在创建和运行任务时自己产生的正常写入；
   - 为接入本地代理和面板服务，工具可以修改 `config.toml` 里由它自己管理、带标记的设置（用户 2026-09-24 授权）。改之前先备份，能一键恢复，其他设置一律不动。只在这些时候改：用户运行安装或卸载命令；用户在面板里点“启用”或“停用”；插件被移除或关掉、又没先停用时，引擎把 Codex 恢复直连（v0.1）；
   - 为让生图和改图也能连到本地代理，工具可以在 `~/.codex/.env` 里写一段带标记的 `NO_PROXY`，只含本机地址，并保留用户自己的条目（用户 2026-09-24 同意）。`.env` 可能含密钥，工具不复制、不输出它，只增删自己的那一段；文件里只剩这一段时，恢复时连文件一起删掉。
-- 真实数据不进仓库：从真实会话和用户素材里提取的图片、记录片段、日志和备份，只能放在本机，开发时放在 `local/` 目录（已被 git 忽略），装好的插件放在数据目录（Windows 是 `%LOCALAPPDATA%\codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 是 `~/.local/share/codex-attachment-manager`）；任何时候都不提交。仓库里的样例数据只能是合成的或脱敏的。
+- 真实数据不进仓库：从真实会话和用户素材里提取的图片、记录片段、日志和备份，只能放在本机，开发时放在 `local/` 目录（已被 git 忽略），装好的插件放在数据目录（Windows 是 `%USERPROFILE%\.codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 是 `~/.local/share/codex-attachment-manager`）；任何时候都不提交。仓库里的样例数据只能是合成的或脱敏的。Windows 的数据目录 2026-09-25 从 `%LOCALAPPDATA%` 下挪出来（用户同意）：Codex、Claude 这类微软商店应用启动的程序在 AppData 里新建的文件，会被转存到各应用的私有目录，插件服务、引擎和命令行看到的数据就不一样了。
 - 仓库里的文档和代码不写用户本机的具体路径（例如个人项目文件夹）。`~/.codex`、`%LOCALAPPDATA%` 这类通用位置可以写。本项目以后会开源。
 - 不改写原生任务的历史记录。
 - 代理只替换用户取消的图片，连同 Codex 附在它前后的路径标签；有图片被省略时，另外插入一条“上下文管理说明”开发者消息（用户 2026-09-25 要求告诉模型原因，见第 1 节“占位符”）。请求里的其他内容原样转发。

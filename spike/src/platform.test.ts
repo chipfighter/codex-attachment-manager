@@ -12,7 +12,7 @@ import { dataDir } from "../../plugin/src/paths.ts";
 const home = join("/", "home", "someone");
 
 test("the data folder follows each platform's convention, and CAM_DATA_DIR wins", () => {
-  assert.equal(dataDir({ LOCALAPPDATA: join("C:", "Users", "someone", "AppData", "Local") }, "win32", home), join("C:", "Users", "someone", "AppData", "Local", "codex-attachment-manager"));
+  assert.equal(dataDir({ LOCALAPPDATA: join("C:", "Users", "someone", "AppData", "Local") }, "win32", home), join(home, ".codex-attachment-manager"), "not under AppData, which Store apps redirect");
   assert.equal(dataDir({}, "darwin", home), join(home, "Library", "Application Support", "codex-attachment-manager"));
   assert.equal(dataDir({}, "linux", home), join(home, ".local", "share", "codex-attachment-manager"));
   assert.equal(dataDir({ XDG_DATA_HOME: join(home, "data") }, "linux", home), join(home, "data", "codex-attachment-manager"));

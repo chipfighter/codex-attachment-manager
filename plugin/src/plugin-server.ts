@@ -24,6 +24,7 @@ import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
 import { currentLang, langOf, rememberLang, type Lang } from "./language.ts";
 import { say } from "./messages.ts";
+import { migrateDataOnce } from "./migrate-data.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir, pixelCacheDirOf } from "./paths.ts";
 import { connectDirectly, useEngine, usesEngine } from "./setup.ts";
@@ -190,6 +191,7 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
 }
 
 function main(): void {
+  migrateDataOnce(); // v0.1-15: Windows moved the data folder
   const send = (message: Json) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
   let engineState = "";
   const supervise = async () => {

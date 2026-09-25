@@ -73,7 +73,10 @@
   - 面板跟随 Codex 的界面语言；发给模型的说明也跟着换，中文原样不动；
   - 插件页英文为主、附一段中文；标签页标题跟着语言；命令行按系统语言；
   - 英文自测：模型不收回回答；被问到没说过的细节时回复“need IMG-001”，没有编造。
-  - 待用户重装后确认：Codex 会不会把界面语言告诉面板（`cam status` 看来源）。
+  - 用户 2026-09-25 实测通过：面板跟着 Codex 切到英文；Codex 确实把界面语言告诉了面板（记录里的来源是 codex）。当时 `cam status` 看不到这份记录，原因见 v0.1-15。
+- [x] **v0.1-15 Windows 的数据目录挪出 AppData**（用户 2026-09-25 同意；`paths.ts`、`migrate-data.ts`、`uninstall.ps1`；设计见 plan.md 第 17 节；证据：3 个单元测试）
+  - 起因：收尾检查语言记录时发现，Codex、Claude 启动的程序写的数据被 Windows 转存到了各自的私有目录，插件服务、引擎和命令行看到的数据不一样。
+  - 数据目录改为 `%USERPROFILE%\.codex-attachment-manager`；第一次启动时把旧目录和各私有副本里的数据合并过来，同名文件取最新的。
 - [x] **v0.1-7 许可证和 CI**（用户 2026-09-25 定：MIT，并加上 CI）：`LICENSE`（插件目录里也放一份）；`.github/workflows/ci.yml` 在 Windows、macOS、Linux 上跑单元测试；问题反馈模板，方便 macOS、Linux 用户在 GitHub 上报问题。
 - 待定：Windows 上不先停用就移除插件，Codex 会断连，只能靠卸载命令恢复；要不要用计划任务让引擎不依赖插件启动，见 spec.md 第 5 节。
 
