@@ -2,7 +2,7 @@
 // for in its latest reply, and the engine's statistics of the latest request. Also applies check/uncheck actions.
 // P4 — serves each image for the panel's thumbnails and previews, and the inputs of its "next message" estimate:
 // the last full request as a size baseline, which images it carried, and whether the engine could not rewrite it.
-// v0.1-9 — the task's name for the title (thread-names.ts).
+// v0.1-9 — the task's name for the title (thread-names.ts). v0.1-13 — whether part of the history could not be found.
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
@@ -32,8 +32,10 @@ export type SendInfo = {
 };
 // started: the thread has a rollout. A panel opened on a new chat before its first message may be tied to a thread
 // Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
+// historyMissing: an earlier part of the history is gone for good (e.g. the task a fork came from was deleted), so the
+// images in it are not listed (v0.1-13).
 export type PanelState = {
-  threadId: string; title: string | null; started: boolean; turns: number; images: PanelImage[]; requested: string[];
+  threadId: string; title: string | null; started: boolean; historyMissing: boolean; turns: number; images: PanelImage[]; requested: string[];
   totals: { images: number; unchecked: number; checkedBytes: number; allBytes: number };
   send: SendInfo;
 };
@@ -117,7 +119,7 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
     };
   });
   return {
-    threadId, title, started: history.length > 0, turns: index.turns, images, requested,
+    threadId, title, started: history.length > 0, historyMissing: false, turns: index.turns, images, requested,
     totals: {
       images: images.length,
       unchecked: images.filter((image) => !image.checked).length,
@@ -128,33 +130,35 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
   };
 }
 
-// A thread with no rollout yet (new, or the panel opened outside a thread) simply has no images.
-function historyOf(threadId: string, sessionsDir: string): Record_[] {
+// A thread with no rollout yet (new, or the panel opened outside a thread) simply has no images. An earlier part of
+// the history that is gone for good is left out and reported.
+function historyOf(threadId: string, sessionsDir: string): { history: Record_[]; missing: string[] } {
+  const missing: string[] = [];
   try {
-    return readThreadHistory(sessionsDir, threadId);
+    return { history: readThreadHistory(sessionsDir, threadId, missing), missing };
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("no rollout found")) return [];
+    if (error instanceof Error && error.message.startsWith("no rollout found")) return { history: [], missing };
     throw error;
   }
 }
 
 function load(threadId: string, options: PanelOptions) {
   const root = options.dataRoot ?? dataDir();
-  const history = historyOf(threadId, options.sessionsDir);
+  const { history, missing } = historyOf(threadId, options.sessionsDir);
   const index = buildIndex(threadId, history);
   const selection = effectiveSelection(threadId, options.sessionsDir, selectionDirOf(root));
   const stats = readRequestStats(threadId, requestStatsDirOf(root));
   const title = threadTitle(options.sessionsDir, threadId, history);
-  return { root, history, index, selection, stats, title };
+  return { root, history, index, selection, stats, title, historyMissing: missing.length > 0 };
 }
 
 export function loadPanelState(threadId: string, options: PanelOptions): PanelState {
-  const { history, index, selection, stats, title } = load(threadId, options);
-  return panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats, title);
+  const { history, index, selection, stats, title, historyMissing } = load(threadId, options);
+  return { ...panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats, title), historyMissing };
 }
 
 export function applySelection(threadId: string, change: { uncheck?: string[]; check?: string[]; checkAll?: boolean }, options: PanelOptions): PanelState {
-  const { root, history, index, selection, stats, title } = load(threadId, options);
+  const { root, history, index, selection, stats, title, historyMissing } = load(threadId, options);
   const unchecked = change.checkAll ? {} : { ...selection.unchecked };
   const byId = new Map(index.images.map((image) => [image.id, image]));
   for (const id of change.uncheck ?? []) {
@@ -169,13 +173,13 @@ export function applySelection(threadId: string, change: { uncheck?: string[]; c
     delete unchecked[image.key];
   }
   writeSelection({ threadId, unchecked }, selectionDirOf(root));
-  return panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats, title);
+  return { ...panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats, title), historyMissing };
 }
 
 // One image for the panel: a PNG larger than maxSide is scaled down; smaller PNGs and other formats (which the
 // browser scales itself) are passed through as they are.
 export function imageFor(threadId: string, id: string, maxSide: number, options: PanelOptions): { id: string; dataUrl: string | null } {
-  const history = historyOf(threadId, options.sessionsDir);
+  const { history } = historyOf(threadId, options.sessionsDir);
   const index = buildIndex(threadId, history);
   const image = index.images.find((candidate) => candidate.id === id);
   if (!image) throw new Error(`${id} is not an image of this thread`);

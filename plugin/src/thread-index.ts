@@ -7,7 +7,8 @@
 // Codex compressed after a week without activity (.jsonl.zst) are read as well.
 // v0.1-10 — the first line of recent rollouts, so a panel opened on a new chat can find the thread that started there.
 // v0.1-12 — archived tasks (<CODEX_HOME>/archived_sessions) are looked up too: a fork's history may start in a page of
-// a task the user has archived since.
+// a task the user has archived since. v0.1-13 — if that page is gone for good (its task deleted), the rest is read and
+// the gap reported, instead of failing.
 // Input: the sessions directory and a thread id. Output: ThreadIndex (in memory; files are parsed incrementally).
 
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
@@ -144,12 +145,20 @@ function withSegments<T>(sessionsDir: string, read: (tree: Tree) => T): T {
 
 const baseOf = (file: string): Json | null => (records(file)[0]?.type === "session_meta" ? records(file)[0].payload.history_base ?? null : null);
 
-function effective(segments: Map<string, string>, segmentId: string, endOffset = Number.POSITIVE_INFINITY): Parsed[] {
+// With `missing` (the second look, after walking the tree again), a page the history starts in that is still not found
+// is left out and its id added to `missing`; without it, the miss is thrown for the caller to look again.
+function effective(segments: Map<string, string>, segmentId: string, endOffset = Number.POSITIVE_INFINITY, missing: string[] | null = null): Parsed[] {
   const file = segments.get(segmentId);
   // Not listed (yet): the caller walks the tree again once.
   if (!file) throw Object.assign(new Error(`rollout segment not found: ${segmentId}`), { code: "ENOENT" });
   const base = baseOf(file);
-  const inherited = base ? effective(segments, base.thread_id, base.end_byte_offset) : [];
+  let inherited: Parsed[] = [];
+  if (base) {
+    try { inherited = effective(segments, base.thread_id, base.end_byte_offset, missing); } catch (error) {
+      if (!missing || (error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+      if (!missing.includes(base.thread_id)) missing.push(base.thread_id);
+    }
+  }
   return [...inherited, ...records(file).filter((record) => record.offset < endOffset)];
 }
 
@@ -320,15 +329,22 @@ export function threadsStartedSince(sessionsDir: string, since: number): Array<{
 }
 
 // The thread's model-visible history records, following paginated segments back through history_base.
-export function readThreadHistory(sessionsDir: string, threadId: string): Parsed[] {
-  return withSegments(sessionsDir, ({ segments, threadOf }) => {
+// A page the history starts in may be gone for good (its task deleted rather than archived): after walking the tree
+// again, what is left is returned and the missing page ids are added to `missing`. The thread's own latest page must
+// be there.
+export function readThreadHistory(sessionsDir: string, threadId: string, missing: string[] = []): Parsed[] {
+  const read = ({ segments, threadOf }: Tree, gaps: string[] | null) => {
     const own = [...segments.keys()].filter((id) => threadOf.get(id) === threadId);
     if (!own.length) throw new Error(`no rollout found for thread ${threadId}`);
     const bases = new Set(own.map((id) => baseOf(segments.get(id)!)?.thread_id).filter(Boolean));
     const heads = own.filter((id) => !bases.has(id));
     if (heads.length !== 1) throw new Error(`expected one latest rollout segment for ${threadId}, found ${heads.length}`);
-    return effective(segments, heads[0]);
-  });
+    return effective(segments, heads[0], Number.POSITIVE_INFINITY, gaps);
+  };
+  try { return read(allSegments(sessionsDir), null); } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    return read(allSegments(sessionsDir, true), missing);
+  }
 }
 
 export function loadThreadIndex(sessionsDir: string, threadId: string): ThreadIndex {

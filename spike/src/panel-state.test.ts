@@ -1,5 +1,6 @@
 // Purpose: P3-3 — the panel's data: image states, the ids the model asked for, check/uncheck, and thumbnails.
 // P4 — previews and other formats, and threads without a rollout yet. v0.1-9 — the task's name as the title.
+// v0.1-13 — a fork whose earlier history is gone.
 // Input: synthetic rollouts in temporary folders; output: Node test assertions only.
 
 import assert from "node:assert/strict";
@@ -10,7 +11,7 @@ import { decodePng } from "../../plugin/src/png.ts";
 import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "../../plugin/src/panel-state.ts";
 import { requestStatsDirOf } from "../../plugin/src/paths.ts";
 import { recordRequest } from "../../plugin/src/request-stats.ts";
-import { assistant, line, red, sampleSessions, THREAD, turn } from "./testfixtures.ts";
+import { assistant, line, red, sampleSessions, THREAD, turn, upload } from "./testfixtures.ts";
 import { shrink } from "../../plugin/src/thumbnail.ts";
 
 const records = (text: string) => text.trim().split("\n").map((raw) => JSON.parse(raw));
@@ -113,4 +114,15 @@ test("the title is the task's name, else the start of its first message; a threa
 `);
   assert.equal(loadPanelState(THREAD, options).title, "改图任务");
   assert.equal(loadPanelState("01a0d301-0000-7000-8000-00000000ffff", options).title, null);
+});
+
+test("a fork whose earlier history is gone lists the images left and says part of the history is missing", () => {
+  const options = sampleSessions();
+  const FORK = "01a0d301-0000-7000-8000-00000000abce";
+  writeFileSync(join(options.sessionsDir, "2026", "09", "24", `rollout-2026-09-24T11-00-00-${FORK}.jsonl`),
+    line("session_meta", { id: FORK, forked_from_id: "01a0d301-0000-7000-8000-00000000dead", history_base: { thread_id: "01a0d301-0000-7000-8000-00000000dead", end_byte_offset: 99 } }) +
+    turn("t5") + upload("msg_5", "t5", [["later.png", red]]));
+  const state = loadPanelState(FORK, options);
+  assert.deepEqual([state.historyMissing, state.started, state.images.map((image) => image.name)], [true, true, ["later.png"]]);
+  assert.equal(loadPanelState(THREAD, options).historyMissing, false);
 });

@@ -2,6 +2,7 @@
 // re-reads of an appended file, and paginated segments chained through history_base.
 // v0.1-10/11 — compressed rollouts, new rollouts found in today's folder between full walks, a moved rollout found
 // again, and pixel fingerprints shared through the cache folder. v0.1-12 — a fork's history in an archived task's page.
+// v0.1-13 — a history whose earlier page is gone for good.
 // Input: synthetic rollouts in a temporary directory; output: Node test assertions only.
 
 import assert from "node:assert/strict";
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { zstdCompressSync } from "node:zlib";
-import { hasRollout, loadThreadIndex, setPixelCache, threadsStartedSince } from "../../plugin/src/thread-index.ts";
+import { buildIndex, hasRollout, loadThreadIndex, readThreadHistory, setPixelCache, threadsStartedSince } from "../../plugin/src/thread-index.ts";
 import { startThread, todayFolder } from "./testfixtures.ts";
 import { png } from "./testkit.ts";
 
@@ -158,4 +159,16 @@ test("a fork's history may start in a page of a task the user archived, before o
       assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["a.png", "b.png"], "archived after the first read");
     }
   }
+});
+
+test("when a page the history starts in is gone for good (its task deleted), the rest is read and the gap reported", () => {
+  const { dir, day } = sessions();
+  const GONE = "01a0d301-0000-7000-8000-0000000000dd";
+  writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
+    line("session_meta", { id: THREAD, forked_from_id: GONE, history_base: { thread_id: GONE, end_byte_offset: 1234 } }) + turn("t2") + upload("msg_2", "t2", "b.png", blue));
+  const missing: string[] = [];
+  assert.deepEqual(buildIndex(THREAD, readThreadHistory(dir, THREAD, missing)).images.map((i) => [i.id, i.name]), [["IMG-001", "b.png"]]);
+  assert.deepEqual(missing, [GONE]);
+  assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["b.png"], "the engine reads what is left too");
+  assert.throws(() => readThreadHistory(dir, "01a0d301-0000-7000-8000-0000000000ee"), /no rollout found/, "a thread without a page of its own still has no history");
 });
