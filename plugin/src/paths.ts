@@ -1,4 +1,5 @@
-// Purpose: one place for where the tool keeps its own data (selection state, request statistics, logs, backups).
+// Purpose: one place for where the tool keeps its own data (selection state, request statistics, logs, backups; since
+// v0.1-10 which task a panel was switched to, and v0.1-11 pixel fingerprints — never image content).
 // Input: CAM_DATA_DIR when set; otherwise a per-user folder: %LOCALAPPDATA%\codex-attachment-manager on Windows,
 // ~/Library/Application Support/codex-attachment-manager on macOS, $XDG_DATA_HOME (or ~/.local/share)/
 // codex-attachment-manager on Linux. Never inside the plugin folder, which Codex replaces on every update, and never
@@ -19,3 +20,5 @@ export function dataDir(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.P
 export const selectionDirOf = (root = dataDir()) => join(root, "selection");
 export const requestStatsDirOf = (root = dataDir()) => join(root, "state", "requests");
 export const proxyLogDirOf = (root = dataDir()) => join(root, "proxy");
+export const bindingsDirOf = (root = dataDir()) => join(root, "bindings");
+export const pixelCacheDirOf = (root = dataDir()) => join(root, "cache", "pixels");

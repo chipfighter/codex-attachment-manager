@@ -1,6 +1,7 @@
 // Purpose: P3-3 — the plugin's MCP server: thread resolution, the rule that only the user may check or uncheck,
 // thumbnails kept out of model-visible content, and a full stdio session (engine supervision switched off).
-// P4 — the panel's entrypoint and page resource.
+// P4 — the panel's entrypoint and page resource. v0.1-10 — a panel on a new chat is offered the thread the user just
+// started and follows it once bound.
 // Input: synthetic rollouts in temporary folders; output: Node test assertions only.
 
 import assert from "node:assert/strict";
@@ -9,7 +10,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { callTool, fromModel, PANEL_MIME, PANEL_URI, readResource, threadOf, TOOLS } from "../../plugin/src/plugin-server.ts";
-import { sampleSessions, THREAD } from "./testfixtures.ts";
+import { line, red, sampleSessions, startThread, THREAD, turn, upload } from "./testfixtures.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const modelMeta = { callId: "exec-1", "x-codex-turn-metadata": { thread_id: THREAD, turn_id: "t9" } };
@@ -88,10 +89,40 @@ test("a stdio session lists the tools and answers calls", async () => {
   child.stdin.end();
   assert.deepEqual(replies[1].result.capabilities, { tools: {}, resources: {} });
   assert.deepEqual(replies[1].result.serverInfo.icons.map((icon: any) => [icon.theme, icon.src.slice(0, 26)]), [["light", "data:image/svg+xml;base64,"], ["dark", "data:image/svg+xml;base64,"]]);
-  assert.deepEqual(replies[2].result.tools.map((tool: any) => tool.name), ["cam_panel", "cam_set_selection", "cam_image", "cam_setup"]);
+  assert.deepEqual(replies[2].result.tools.map((tool: any) => tool.name), ["cam_panel", "cam_set_selection", "cam_image", "cam_setup", "cam_bind"]);
   assert.equal(replies[3].result.structuredContent.images.length, 3);
   assert.equal(replies[3].result.structuredContent.engineRunning, null, "engine supervision is off in this test");
   assert.equal(replies[4].result.isError, true);
   assert.deepEqual(replies[5].result.resources.map((resource: any) => [resource.uri, resource.mimeType]), [[PANEL_URI, PANEL_MIME]]);
   assert.equal(replies[6].result.contents[0].mimeType, PANEL_MIME);
+});
+
+test("a panel on a new chat is offered the thread the user just started, and follows it once bound", () => {
+  const { sessionsDir, dataRoot } = sampleSessions();
+  process.env.CAM_DATA_DIR = dataRoot;
+  const PANEL = "01a0d301-0000-7000-8000-00000000f00d";
+  const NEW = "01a0d301-0000-7000-8000-0000000000d1";
+  const SUB = "01a0d301-0000-7000-8000-0000000000d2";
+  const meta = { thread_id: PANEL, threadId: PANEL };
+  try {
+    const shown = [[Date.now() - 5_000, Date.now()]];
+    assert.deepEqual(callTool("cam_panel", { shown }, meta, sessionsDir).structuredContent.newTasks, []);
+    startThread(sessionsDir, NEW, {}, 1_000, line("event_msg", { type: "user_message", message: "看看这张图" }) + turn("t1") + upload("msg_n", "t1", [["n.png", red]]));
+    startThread(sessionsDir, SUB, { source: { subagent: { thread_spawn: { parent_thread_id: NEW, depth: 1 } } }, thread_source: "subagent", parent_thread_id: NEW }, 500);
+    const waiting = callTool("cam_panel", { shown }, meta, sessionsDir).structuredContent;
+    assert.equal(waiting.started, false);
+    assert.deepEqual(waiting.newTasks.map((task: any) => [task.threadId, task.title]), [[NEW, "看看这张图"]], "the sub-agent is not offered");
+    assert.equal(callTool("cam_panel", {}, meta, sessionsDir).structuredContent.newTasks, undefined, "Codex's own call gets no list");
+    assert.throws(() => callTool("cam_bind", { target: NEW }, { ...meta, "x-codex-turn-metadata": { thread_id: PANEL } }, sessionsDir), /只有用户能切换/);
+    assert.throws(() => callTool("cam_bind", { target: SUB }, meta, sessionsDir), /只能切到用户自己开始的任务/);
+    const bound = callTool("cam_bind", { target: NEW }, meta, sessionsDir).structuredContent;
+    assert.deepEqual([bound.threadId, bound.switchedFrom, bound.images.length, bound.title], [NEW, PANEL, 1, "看看这张图"]);
+    const later = callTool("cam_panel", { shown }, meta, sessionsDir).structuredContent;
+    assert.deepEqual([later.threadId, later.switchedFrom, later.newTasks], [NEW, PANEL, undefined]);
+    callTool("cam_set_selection", { uncheck: ["IMG-001"] }, meta, sessionsDir);
+    assert.equal(callTool("cam_panel", {}, { thread_id: NEW, threadId: NEW }, sessionsDir).structuredContent.totals.unchecked, 1, "the change is the new thread's");
+    assert.throws(() => callTool("cam_bind", { target: NEW }, panelMeta, sessionsDir), /已经开始/, "a panel on a started thread stays");
+  } finally {
+    delete process.env.CAM_DATA_DIR;
+  }
 });

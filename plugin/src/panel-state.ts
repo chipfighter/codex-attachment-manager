@@ -2,6 +2,7 @@
 // for in its latest reply, and the engine's statistics of the latest request. Also applies check/uncheck actions.
 // P4 — serves each image for the panel's thumbnails and previews, and the inputs of its "next message" estimate:
 // the last full request as a size baseline, which images it carried, and whether the engine could not rewrite it.
+// v0.1-9 — the task's name for the title (thread-names.ts).
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
@@ -9,6 +10,7 @@ import { dataDir, requestStatsDirOf, selectionDirOf } from "./paths.ts";
 import { readRequestStats, type RequestStats } from "./request-stats.ts";
 import { effectiveSelection, writeSelection } from "./selection.ts";
 import { buildIndex, imageData, readThreadHistory, type IndexedImage, type ThreadIndex } from "./thread-index.ts";
+import { threadTitle } from "./thread-names.ts";
 import { pngThumbnail } from "./thumbnail.ts";
 
 type Json = Record<string, any>;
@@ -31,7 +33,7 @@ export type SendInfo = {
 // started: the thread has a rollout. A panel opened on a new chat before its first message may be tied to a thread
 // Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
 export type PanelState = {
-  threadId: string; started: boolean; turns: number; images: PanelImage[]; requested: string[];
+  threadId: string; title: string | null; started: boolean; turns: number; images: PanelImage[]; requested: string[];
   totals: { images: number; unchecked: number; checkedBytes: number; allBytes: number };
   send: SendInfo;
 };
@@ -95,7 +97,7 @@ export function sameContent(index: ThreadIndex, image: IndexedImage): string[] {
     .map((other) => other.id);
 }
 
-export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, stats: RequestStats | null): PanelState {
+export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, stats: RequestStats | null, title: string | null = null): PanelState {
   const requested = requestedIds(history);
   const carried: Record<string, number> | null = stats?.lastHttp?.imageSizes ?? null;
   // Images after the last one that request carried, or from a later turn, were added since and go out next time.
@@ -115,7 +117,7 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
     };
   });
   return {
-    threadId, started: history.length > 0, turns: index.turns, images, requested,
+    threadId, title, started: history.length > 0, turns: index.turns, images, requested,
     totals: {
       images: images.length,
       unchecked: images.filter((image) => !image.checked).length,
@@ -142,16 +144,17 @@ function load(threadId: string, options: PanelOptions) {
   const index = buildIndex(threadId, history);
   const selection = effectiveSelection(threadId, options.sessionsDir, selectionDirOf(root));
   const stats = readRequestStats(threadId, requestStatsDirOf(root));
-  return { root, history, index, selection, stats };
+  const title = threadTitle(options.sessionsDir, threadId, history);
+  return { root, history, index, selection, stats, title };
 }
 
 export function loadPanelState(threadId: string, options: PanelOptions): PanelState {
-  const { history, index, selection, stats } = load(threadId, options);
-  return panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats);
+  const { history, index, selection, stats, title } = load(threadId, options);
+  return panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats, title);
 }
 
 export function applySelection(threadId: string, change: { uncheck?: string[]; check?: string[]; checkAll?: boolean }, options: PanelOptions): PanelState {
-  const { root, history, index, selection, stats } = load(threadId, options);
+  const { root, history, index, selection, stats, title } = load(threadId, options);
   const unchecked = change.checkAll ? {} : { ...selection.unchecked };
   const byId = new Map(index.images.map((image) => [image.id, image]));
   for (const id of change.uncheck ?? []) {
@@ -166,7 +169,7 @@ export function applySelection(threadId: string, change: { uncheck?: string[]; c
     delete unchecked[image.key];
   }
   writeSelection({ threadId, unchecked }, selectionDirOf(root));
-  return panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats);
+  return panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats, title);
 }
 
 // One image for the panel: a PNG larger than maxSide is scaled down; smaller PNGs and other formats (which the

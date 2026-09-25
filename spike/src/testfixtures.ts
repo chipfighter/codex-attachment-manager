@@ -36,3 +36,20 @@ export function sampleSessions(extra = ""): { sessionsDir: string; dataRoot: str
     turn("t2") + assistant("需要 IMG-001。IMG-003 与 IMG-002 相同。", "t2") + extra);
   return { sessionsDir: join(root, "sessions"), dataRoot: join(root, "data") };
 }
+
+// The folder Codex files a rollout started now in (sessions/YYYY/MM/DD, local time): where new threads appear.
+export function todayFolder(sessionsDir: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const folder = join(sessionsDir, String(now.getFullYear()), pad(now.getMonth() + 1), pad(now.getDate()));
+  mkdirSync(folder, { recursive: true });
+  return folder;
+}
+
+// A thread whose first message was sent `agoMs` ago: Codex writes the rollout's first line at that moment.
+export function startThread(sessionsDir: string, id: string, meta: Record<string, any> = {}, agoMs = 0, body = ""): string {
+  const at = new Date(Date.now() - agoMs).toISOString();
+  const file = join(todayFolder(sessionsDir), `rollout-${at.slice(0, 19).replace(/:/g, "-")}-${id}.jsonl`);
+  writeFileSync(file, `${JSON.stringify({ timestamp: at, type: "session_meta", payload: { id, timestamp: at, source: "vscode", thread_source: "user", ...meta } })}\n${body}`);
+  return file;
+}

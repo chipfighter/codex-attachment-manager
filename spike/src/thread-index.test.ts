@@ -1,13 +1,18 @@
 // Purpose: P2 — the thread index read from rollouts: stable ids in history order, turn numbers, incremental
 // re-reads of an appended file, and paginated segments chained through history_base.
+// v0.1-10/11 — compressed rollouts, new rollouts found in today's folder between full walks, a moved rollout found
+// again, and pixel fingerprints shared through the cache folder.
 // Input: synthetic rollouts in a temporary directory; output: Node test assertions only.
 
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
+import { zstdCompressSync } from "node:zlib";
+import { hasRollout, loadThreadIndex, setPixelCache, threadsStartedSince } from "../../plugin/src/thread-index.ts";
+import { startThread, todayFolder } from "./testfixtures.ts";
 import { png } from "./testkit.ts";
 
 const THREAD = "01a0d301-0000-7000-8000-000000000001";
@@ -78,4 +83,56 @@ test("an unnamed image takes the name of an identical named one", () => {
   const viewed = line("response_item", { type: "custom_tool_call_output", id: "ctco_1", call_id: "c1", output: [{ type: "input_image", image_url: url(red) }] });
   writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`), line("session_meta", { id: THREAD }) + turn("t1") + upload("msg_1", "t1", "a.png", red) + viewed);
   assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => [i.id, i.kind, i.name]), [["IMG-001", "upload", "a.png"], ["IMG-002", "tool", "a.png"]]);
+});
+
+test("a rollout Codex compressed after a week (.jsonl.zst) is read; once Codex restores the plain file, that one counts", () => {
+  const { dir, day } = sessions();
+  const plain = join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`);
+  const content = line("session_meta", { id: THREAD }) + turn("t1") + upload("msg_1", "t1", "a.png", red);
+  writeFileSync(`${plain}.zst`, zstdCompressSync(Buffer.from(content)));
+  assert.equal(hasRollout(dir, THREAD), true);
+  assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["a.png"]);
+  // To append, Codex writes the plain file back and then removes the compressed one.
+  writeFileSync(plain, content + turn("t2") + upload("msg_2", "t2", "b.png", blue));
+  rmSync(`${plain}.zst`);
+  assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["a.png", "b.png"]);
+});
+
+test("new rollouts in today's folder are found between full walks; a moved rollout is found again when a read misses it", () => {
+  const { dir, day } = sessions();
+  const name = `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`;
+  writeFileSync(join(day, name), line("session_meta", { id: THREAD }) + turn("t1") + upload("msg_1", "t1", "a.png", red));
+  assert.equal(loadThreadIndex(dir, THREAD).images.length, 1);
+  const NEW = "01a0d301-0000-7000-8000-0000000000e1";
+  assert.equal(hasRollout(dir, NEW), false);
+  startThread(dir, NEW, {}, 1_000);
+  assert.equal(hasRollout(dir, NEW), true, "without waiting for the next full walk");
+  // A later page of a thread is not a new thread.
+  writeFileSync(join(todayFolder(dir), `rollout-2026-09-25T10-00-00-${NEW}_01a0d301-0000-7000-8000-0000000000e2.jsonl`), line("session_meta", { id: NEW }));
+  assert.deepEqual(threadsStartedSince(dir, Date.now() - 60_000).map((entry) => entry.threadId), [NEW]);
+  const elsewhere = join(dir, "2026", "08", "01");
+  mkdirSync(elsewhere, { recursive: true });
+  renameSync(join(day, name), join(elsewhere, name));
+  assert.equal(loadThreadIndex(dir, THREAD).images.length, 1);
+});
+
+test("pixel fingerprints are shared through the cache folder: a stored one is used instead of decoding again", () => {
+  const cache = mkdtempSync(join(tmpdir(), "cam-pixels-"));
+  setPixelCache(cache);
+  try {
+    const { dir, day } = sessions();
+    const green = png(3, 5, () => [0, 200, 0]);
+    const olive = png(5, 3, () => [120, 120, 0]);
+    writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`), line("session_meta", { id: THREAD }) + turn("t1") + upload("msg_1", "t1", "g.png", green) + upload("msg_2", "t1", "o.png", olive));
+    const idOf = (bytes: Buffer) => createHash("sha256").update(bytes.toString("base64")).digest("hex");
+    const oliveId = idOf(olive);
+    mkdirSync(join(cache, oliveId.slice(0, 2)), { recursive: true });
+    writeFileSync(join(cache, oliveId.slice(0, 2), oliveId), "f".repeat(64));
+    const index = loadThreadIndex(dir, THREAD);
+    assert.equal(index.images[1].pixelSha256, "f".repeat(64), "stored by another process");
+    assert.match(index.images[0].pixelSha256 ?? "", /^[0-9a-f]{64}$/);
+    assert.equal(readFileSync(join(cache, idOf(green).slice(0, 2), idOf(green)), "utf8"), index.images[0].pixelSha256, "decoded once, stored for the others");
+  } finally {
+    setPixelCache(null);
+  }
 });

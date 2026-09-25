@@ -1,50 +1,81 @@
 // Purpose: P2 — the image timeline of one thread, read from its rollout (read-only): every image occurrence in
 // history order with a stable id (IMG-001…), turn number, name, size and content hashes. The CLI and the proxy both
 // derive it from the same files, so they agree on ids without sharing state.
+// v0.1-11 — a panel read on a new process used to walk every rollout folder on each call and decode every PNG for its
+// pixel fingerprint (1.2 s for 12 screenshots). Now the tree is walked in full once a minute and only the folders of
+// today and yesterday in between; fingerprints can be shared between processes through a cache folder. Rollouts
+// Codex compressed after a week without activity (.jsonl.zst) are read as well.
+// v0.1-10 — the first line of recent rollouts, so a panel opened on a new chat can find the thread that started there.
 // Input: the sessions directory and a thread id. Output: ThreadIndex (in memory; files are parsed incrementally).
 
-import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { findImages, type ImageRef } from "./images.ts";
 import { decodePng } from "./png.ts";
 
 type Json = Record<string, any>;
 export type IndexedImage = ImageRef & { id: string; turn: number | null; bytes: number; pixelSha256: string | null };
 export type ThreadIndex = { threadId: string; images: IndexedImage[]; byKey: Map<string, IndexedImage>; turns: number; turnNumbers: Map<string, number> };
-type Parsed = { offset: number; type: string; payload: Json };
+export type Parsed = { offset: number; type: string; payload: Json; timestamp: string | null };
 type FileCache = { size: number; mtimeMs: number; parsedTo: number; records: Parsed[] };
 
-const SEGMENT_NAME = /rollout-[0-9T:-]+-([0-9a-f-]{36})(?:_([0-9a-f-]{36}))?\.jsonl$/;
+const SEGMENT_NAME = /^rollout-[0-9T:-]+-([0-9a-f-]{36})(?:_([0-9a-f-]{36}))?\.jsonl(?:\.zst)?$/;
 const files = new Map<string, FileCache>();
 const pixelHashes = new Map<string, string | null>();
 
 function walk(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+  let entries;
+  try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap((entry) => {
     const full = join(directory, entry.name);
     return entry.isDirectory() ? walk(full) : entry.isFile() ? [full] : [];
   });
 }
 
-// Rollouts are append-only: parse only the complete lines added since the last read.
-function records(file: string): Parsed[] {
+function parseLines(buffer: Buffer, base: number, cache: FileCache): number {
+  let start = 0;
+  for (let end = buffer.indexOf(0x0a); end >= 0; end = buffer.indexOf(0x0a, start)) {
+    const text = buffer.toString("utf8", start, end).replace(/\r$/, "");
+    // A damaged line is skipped rather than failing the whole index; unknown images are sent unchanged anyway.
+    let record: Json | null = null;
+    if (text.trim()) { try { record = JSON.parse(text); } catch { record = null; } }
+    if (record) cache.records.push({ offset: base + start, type: record.type, payload: record.payload ?? {}, timestamp: typeof record.timestamp === "string" ? record.timestamp : null });
+    start = end + 1;
+  }
+  return start;
+}
+
+const missing = (plain: string) => Object.assign(new Error(`rollout missing: ${basename(plain)}`), { code: "ENOENT" });
+
+// A rollout is kept under its plain name; Codex may have compressed it (.jsonl.zst), or turned a compressed one back
+// into plain text to append to it.
+function existing(plain: string): string | null {
+  return existsSync(plain) ? plain : existsSync(`${plain}.zst`) ? `${plain}.zst` : null;
+}
+
+// Rollouts are append-only: parse only the complete lines added since the last read. A compressed one does not change
+// until Codex turns it back into plain text, so it is read whole once.
+function records(plain: string): Parsed[] {
+  const file = existing(plain);
+  if (!file) throw missing(plain);
   const stat = statSync(file);
   let cache = files.get(file);
+  if (file.endsWith(".zst")) {
+    if (!cache || cache.size !== stat.size || cache.mtimeMs !== stat.mtimeMs) {
+      cache = { size: stat.size, mtimeMs: stat.mtimeMs, parsedTo: 0, records: [] };
+      cache.parsedTo = parseLines(zstdDecompressSync(readFileSync(file)), 0, cache);
+      files.set(file, cache);
+    }
+    return cache.records;
+  }
   if (!cache || stat.size < cache.parsedTo) cache = { size: 0, mtimeMs: 0, parsedTo: 0, records: [] };
   if (stat.size !== cache.size || stat.mtimeMs !== cache.mtimeMs) {
     const length = stat.size - cache.parsedTo;
     const buffer = Buffer.alloc(length);
     const fd = openSync(file, "r");
     try { readSync(fd, buffer, 0, length, cache.parsedTo); } finally { closeSync(fd); }
-    let start = 0;
-    for (let end = buffer.indexOf(0x0a); end >= 0; end = buffer.indexOf(0x0a, start)) {
-      const text = buffer.toString("utf8", start, end).replace(/\r$/, "");
-      // A damaged line is skipped rather than failing the whole index; unknown images are sent unchanged anyway.
-      let record: Json | null = null;
-      if (text.trim()) { try { record = JSON.parse(text); } catch { record = null; } }
-      if (record) cache.records.push({ offset: cache.parsedTo + start, type: record.type, payload: record.payload ?? {} });
-      start = end + 1;
-    }
-    cache.parsedTo += start;
+    cache.parsedTo += parseLines(buffer, cache.parsedTo, cache);
     cache.size = stat.size;
     cache.mtimeMs = stat.mtimeMs;
     files.set(file, cache);
@@ -54,16 +85,54 @@ function records(file: string): Parsed[] {
 
 // Every rollout segment by id: a thread's first segment uses the thread id itself, later pages are named
 // <thread>_<segment>. A fork's history_base points into its parent's segments, so bases are looked up globally.
-function allSegments(sessionsDir: string): { segments: Map<string, string>; threadOf: Map<string, string> } {
-  const segments = new Map<string, string>();
-  const threadOf = new Map<string, string>();
-  for (const file of walk(sessionsDir)) {
-    const match = SEGMENT_NAME.exec(basename(file));
-    if (!match) continue;
-    segments.set(match[2] ?? match[1], file);
-    threadOf.set(match[2] ?? match[1], match[1]);
+// Codex files each rollout under <sessions>/YYYY/MM/DD of the day it was created (local time), so new threads, forks
+// and later pages all land in today's folder: between full walks only today's and yesterday's folders (local and UTC)
+// are listed again. A file moved elsewhere is found by the next full walk, or at once when a read misses it.
+type Tree = { walkedAt: number; segments: Map<string, string>; threadOf: Map<string, string> };
+const FULL_WALK_MS = 60_000;
+const trees = new Map<string, Tree>();
+
+export function recentFolders(sessionsDir: string, now = Date.now()): string[] {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const folders = new Set<string>();
+  for (const at of [now, now - 86_400_000]) {
+    const day = new Date(at);
+    folders.add(join(sessionsDir, String(day.getFullYear()), pad(day.getMonth() + 1), pad(day.getDate())));
+    folders.add(join(sessionsDir, String(day.getUTCFullYear()), pad(day.getUTCMonth() + 1), pad(day.getUTCDate())));
   }
-  return { segments, threadOf };
+  return [...folders];
+}
+
+function addSegment(tree: Tree, file: string): void {
+  const match = SEGMENT_NAME.exec(basename(file));
+  if (!match) return;
+  tree.segments.set(match[2] ?? match[1], file.replace(/\.zst$/, ""));
+  tree.threadOf.set(match[2] ?? match[1], match[1]);
+}
+
+function allSegments(sessionsDir: string, fresh = false): Tree {
+  const now = Date.now();
+  let tree = trees.get(sessionsDir);
+  if (!tree || fresh || now - tree.walkedAt > FULL_WALK_MS) {
+    tree = { walkedAt: now, segments: new Map(), threadOf: new Map() };
+    for (const file of walk(sessionsDir)) addSegment(tree, file);
+    trees.set(sessionsDir, tree);
+    return tree;
+  }
+  for (const folder of recentFolders(sessionsDir, now)) {
+    let names: string[];
+    try { names = readdirSync(folder); } catch { continue; }
+    for (const name of names) addSegment(tree, join(folder, name));
+  }
+  return tree;
+}
+
+// Reads that miss a file (moved or deleted since the last full walk) walk the tree again once.
+function withSegments<T>(sessionsDir: string, read: (tree: Tree) => T): T {
+  try { return read(allSegments(sessionsDir)); } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    return read(allSegments(sessionsDir, true));
+  }
 }
 
 const baseOf = (file: string): Json | null => (records(file)[0]?.type === "session_meta" ? records(file)[0].payload.history_base ?? null : null);
@@ -76,10 +145,39 @@ function effective(segments: Map<string, string>, segmentId: string, endOffset =
   return [...inherited, ...records(file).filter((record) => record.offset < endOffset)];
 }
 
+// The engine and the plugin services (Codex starts one per task) share pixel fingerprints through this folder, so a
+// new process does not decode every PNG again. Only fingerprints are stored, never image content. Unset: memory only
+// (tests). "-" marks a PNG our decoder cannot read.
+let pixelCacheDir: string | null = null;
+export function setPixelCache(dir: string | null): void { pixelCacheDir = dir; }
+const SHA256 = /^[0-9a-f]{64}$/;
+
+function storedPixelHash(contentId: string): string | null | undefined {
+  if (!pixelCacheDir || !SHA256.test(contentId)) return undefined;
+  try {
+    const text = readFileSync(join(pixelCacheDir, contentId.slice(0, 2), contentId), "utf8").trim();
+    return text === "-" ? null : SHA256.test(text) ? text : undefined;
+  } catch { return undefined; }
+}
+
+function storePixelHash(contentId: string, hash: string | null): void {
+  if (!pixelCacheDir || !SHA256.test(contentId)) return;
+  try {
+    const folder = join(pixelCacheDir, contentId.slice(0, 2));
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, contentId), hash ?? "-", { flag: "wx" });
+  } catch { /* best effort; another process may have written it first */ }
+}
+
 function pixelHash(ref: ImageRef, value: string): string | null {
   if (ref.mime !== "image/png") return null;
   if (!pixelHashes.has(ref.contentId)) {
-    try { pixelHashes.set(ref.contentId, decodePng(Buffer.from(value, "base64")).pixelSha256); } catch { pixelHashes.set(ref.contentId, null); }
+    let hash = storedPixelHash(ref.contentId);
+    if (hash === undefined) {
+      try { hash = decodePng(Buffer.from(value, "base64")).pixelSha256; } catch { hash = null; }
+      storePixelHash(ref.contentId, hash);
+    }
+    pixelHashes.set(ref.contentId, hash);
   }
   return pixelHashes.get(ref.contentId) ?? null;
 }
@@ -151,32 +249,78 @@ function firstLine(file: string): string {
   }
 }
 
+// The first record of a rollout: read from a plain file without parsing the rest; a compressed one is read whole.
+function firstRecord(plain: string): Parsed | null {
+  if (!existsSync(plain)) return records(plain)[0] ?? null;
+  try {
+    const raw = JSON.parse(firstLine(plain));
+    return { offset: 0, type: raw.type, payload: raw.payload ?? {}, timestamp: typeof raw.timestamp === "string" ? raw.timestamp : null };
+  } catch { return null; }
+}
+
 const origins = new Map<string, { parent: string; at: string } | null>();
 
 // A forked thread's session_meta names the thread it came from and when it was forked. Cached: it never changes.
 export function forkOrigin(sessionsDir: string, threadId: string): { parent: string; at: string } | null {
   if (origins.has(threadId)) return origins.get(threadId)!;
-  const first = allSegments(sessionsDir).segments.get(threadId);
+  const meta = withSegments(sessionsDir, ({ segments }) => {
+    const first = segments.get(threadId);
+    return first ? { found: true, record: firstRecord(first) } : { found: false, record: null };
+  });
   // No rollout yet: do not cache, it may appear once the thread starts.
-  if (!first) return null;
-  let origin: { parent: string; at: string } | null = null;
-  try {
-    const meta = JSON.parse(firstLine(first));
-    if (meta.type === "session_meta" && meta.payload?.forked_from_id) origin = { parent: meta.payload.forked_from_id, at: meta.payload.timestamp ?? "" };
-  } catch { /* unreadable first line: treat as not a fork */ }
+  if (!meta.found) return null;
+  const origin = meta.record?.type === "session_meta" && meta.record.payload.forked_from_id ? { parent: meta.record.payload.forked_from_id, at: meta.record.payload.timestamp ?? "" } : null;
   origins.set(threadId, origin);
   return origin;
 }
 
+// Whether the thread has a rollout at all: a thread Codex prepared for a new chat has none until its first message.
+export function hasRollout(sessionsDir: string, threadId: string): boolean {
+  return allSegments(sessionsDir).segments.has(threadId);
+}
+
+// The thread's session_meta (where it came from: source, thread_source, forked_from_id, parent_thread_id), or null.
+export function sessionMetaOf(sessionsDir: string, threadId: string): Json | null {
+  return withSegments(sessionsDir, ({ segments }) => {
+    const first = segments.get(threadId);
+    const record = first ? firstRecord(first) : null;
+    return record?.type === "session_meta" ? record.payload : null;
+  });
+}
+
+// Threads whose rollout was first written at or after `since` (ms), with their session_meta, newest last. Only
+// today's and yesterday's folders are looked at. For a thread started by a message, the first line is written when
+// that message is sent (Codex writes rollouts lazily), so its timestamp tells when the thread started.
+export function threadsStartedSince(sessionsDir: string, since: number): Array<{ threadId: string; startedAt: number; meta: Json }> {
+  const found: Array<{ threadId: string; startedAt: number; meta: Json }> = [];
+  for (const folder of recentFolders(sessionsDir)) {
+    let names: string[];
+    try { names = readdirSync(folder); } catch { continue; }
+    for (const name of names) {
+      const match = SEGMENT_NAME.exec(name);
+      // First segments only (named after the thread); plain text, since a compressed rollout is a week old.
+      if (!match || match[2] || name.endsWith(".zst")) continue;
+      const file = join(folder, name);
+      try { if (statSync(file).mtimeMs < since) continue; } catch { continue; }
+      const record = firstRecord(file);
+      if (record?.type !== "session_meta") continue;
+      const startedAt = Date.parse(record.timestamp ?? record.payload.timestamp ?? "");
+      if (Number.isFinite(startedAt) && startedAt >= since && !found.some((entry) => entry.threadId === match[1])) found.push({ threadId: match[1], startedAt, meta: record.payload });
+    }
+  }
+  return found.sort((a, b) => a.startedAt - b.startedAt);
+}
+
 // The thread's model-visible history records, following paginated segments back through history_base.
 export function readThreadHistory(sessionsDir: string, threadId: string): Parsed[] {
-  const { segments, threadOf } = allSegments(sessionsDir);
-  const own = [...segments.keys()].filter((id) => threadOf.get(id) === threadId);
-  if (!own.length) throw new Error(`no rollout found for thread ${threadId}`);
-  const bases = new Set(own.map((id) => baseOf(segments.get(id)!)?.thread_id).filter(Boolean));
-  const heads = own.filter((id) => !bases.has(id));
-  if (heads.length !== 1) throw new Error(`expected one latest rollout segment for ${threadId}, found ${heads.length}`);
-  return effective(segments, heads[0]);
+  return withSegments(sessionsDir, ({ segments, threadOf }) => {
+    const own = [...segments.keys()].filter((id) => threadOf.get(id) === threadId);
+    if (!own.length) throw new Error(`no rollout found for thread ${threadId}`);
+    const bases = new Set(own.map((id) => baseOf(segments.get(id)!)?.thread_id).filter(Boolean));
+    const heads = own.filter((id) => !bases.has(id));
+    if (heads.length !== 1) throw new Error(`expected one latest rollout segment for ${threadId}, found ${heads.length}`);
+    return effective(segments, heads[0]);
+  });
 }
 
 export function loadThreadIndex(sessionsDir: string, threadId: string): ThreadIndex {
