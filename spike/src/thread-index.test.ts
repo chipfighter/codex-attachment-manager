@@ -1,7 +1,7 @@
 // Purpose: P2 — the thread index read from rollouts: stable ids in history order, turn numbers, incremental
 // re-reads of an appended file, and paginated segments chained through history_base.
 // v0.1-10/11 — compressed rollouts, new rollouts found in today's folder between full walks, a moved rollout found
-// again, and pixel fingerprints shared through the cache folder.
+// again, and pixel fingerprints shared through the cache folder. v0.1-12 — a fork's history in an archived task's page.
 // Input: synthetic rollouts in a temporary directory; output: Node test assertions only.
 
 import assert from "node:assert/strict";
@@ -134,5 +134,28 @@ test("pixel fingerprints are shared through the cache folder: a stored one is us
     assert.equal(readFileSync(join(cache, idOf(green).slice(0, 2), idOf(green)), "utf8"), index.images[0].pixelSha256, "decoded once, stored for the others");
   } finally {
     setPixelCache(null);
+  }
+});
+
+test("a fork's history may start in a page of a task the user archived, before or after the panel first read it", () => {
+  const PARENT = "01a0d301-0000-7000-8000-0000000000aa";
+  const PAGE = "01a0d301-0000-7000-8000-0000000000ab";
+  const pageName = `rollout-2026-09-23T10-00-00-${PARENT}_${PAGE}.jsonl`;
+  const parentPage = line("session_meta", { id: PARENT }) + turn("t1") + upload("msg_1", "t1", "a.png", red);
+  const fork = line("session_meta", { id: THREAD, forked_from_id: PARENT, history_base: { thread_id: PAGE, end_byte_offset: Buffer.byteLength(parentPage) } }) + turn("t2") + upload("msg_2", "t2", "b.png", blue);
+  for (const archivedFirst of [true, false]) {
+    const root = mkdtempSync(join(tmpdir(), "cam-archived-"));
+    const dir = join(root, "sessions");
+    const archived = join(root, "archived_sessions");
+    const parentDay = join(dir, "2026", "09", "23");
+    const day = join(dir, "2026", "09", "25");
+    for (const folder of [archived, parentDay, day]) mkdirSync(folder, { recursive: true });
+    writeFileSync(join(archivedFirst ? archived : parentDay, pageName), parentPage + upload("msg_x", "t1", "after-fork.png", blue));
+    writeFileSync(join(day, `rollout-2026-09-25T18-00-00-${THREAD}.jsonl`), fork);
+    assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["a.png", "b.png"], archivedFirst ? "archived before" : "not archived yet");
+    if (!archivedFirst) {
+      renameSync(join(parentDay, pageName), join(archived, pageName));
+      assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["a.png", "b.png"], "archived after the first read");
+    }
   }
 });
