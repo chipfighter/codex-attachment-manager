@@ -4,7 +4,7 @@
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
 // (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
-// does not go through the engine yet, ?demo=disable for the 停用 confirmation).
+// does not go through the engine yet, ?demo=disable for the 停用插件 confirmation, ?demo=disabled for right after it).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
 
@@ -124,7 +124,9 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
     setTimeout(() => {
       if (params.get("demo") === "pending") d.querySelector('[data-id="IMG-002"] input')?.click();
       if (params.get("demo") === "preview") d.querySelector('[data-id="IMG-004"] .thumb')?.click();
-      if (params.get("demo") === "disable") d.getElementById("disable")?.click();
+      if (params.get("demo") === "disable") d.querySelector("#plugin .off")?.click();
+      // Leaves the (temporary) Codex home switched off; restart the page's server for the other states.
+      if (params.get("demo") === "disabled") { d.querySelector("#plugin .off")?.click(); setTimeout(() => d.querySelector("#plugin .off.confirming")?.click(), 150); }
     }, 700);
   }
   document.getElementById("theme").onclick = () => { theme = theme === "dark" ? "light" : "dark"; document.body.classList.toggle("dark", theme === "dark"); send({ method: "ui/notifications/host-context-changed", params: { theme } }); };

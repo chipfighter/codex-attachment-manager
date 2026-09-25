@@ -9,7 +9,9 @@
   images in history order; the user previews them, checks or unchecks them, and confirms. Nothing is sent to the model.
   Input: the MCP Apps bridge (postMessage) — Codex's call of cam_panel, and our own calls of cam_panel, cam_image and
   cam_set_selection. Output: selection changes through cam_set_selection. Self-contained: no network, no storage.
-  v0.1-5 — 启用 / 停用 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
+  v0.1-5 — 启用插件 / 停用插件 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
+  The state is polled, and also re-read whenever the user moves to or touches the panel, or presses 刷新: the host may
+  slow or pause the timers of a panel it thinks is in the background.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -57,8 +59,24 @@
   .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
   .count { padding: 0 7px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 20px; font-variant-numeric: tabular-nums; }
   .count:empty { display: none; }
-  .quiet { margin-left: auto; height: 24px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--text-3); font-size: 12px; cursor: pointer; transition: background .15s, color .15s; }
-  .quiet:hover { background: var(--bg-soft); color: var(--text-2); }
+  .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .icon-quiet { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-3); cursor: pointer; display: grid; place-items: center; transition: background .15s, color .15s; }
+  .icon-quiet:hover { background: var(--bg-soft); color: var(--text-2); }
+  .icon-quiet svg { width: 16px; height: 16px; }
+  .icon-quiet.spinning svg { animation: spin .8s linear infinite; }
+  .icon-quiet.stale { color: var(--warn); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .plugin { display: flex; gap: 6px; }
+  .plugin:empty { display: none; }
+  .plugin button { height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s, transform .1s; }
+  .plugin button:active:not(:disabled) { transform: scale(.97); }
+  .plugin button:disabled { opacity: .5; cursor: default; }
+  .plugin .on { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); }
+  .plugin .on:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
+  .plugin .off { border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent); background: transparent; color: var(--danger); }
+  .plugin .off:hover:not(:disabled) { background: var(--danger-bg); }
+  .plugin .off.confirming { border-color: var(--danger); background: var(--danger); color: var(--bg); }
+  .plugin .off.confirming:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 86%, var(--text)); }
   .plan { margin-top: 4px; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .plan b { font-weight: 600; color: var(--text); }
   .meter { margin-top: 12px; padding: 10px 12px 11px; border-radius: 12px; background: var(--bg-soft); }
@@ -125,13 +143,8 @@
   .notice.warn { background: var(--warn-bg); color: var(--warn); }
   .notice.error { background: var(--danger-bg); color: var(--danger); }
   .notice.info { background: var(--info-bg); color: var(--text); }
-  .notice.cta { align-items: center; }
   .notice .grow { flex: 1; }
   .notice button { flex: none; border: 0; background: none; padding: 0; font-weight: 600; cursor: pointer; color: inherit; font-size: 12.5px; }
-  .notice button.primary { height: 26px; padding: 0 12px; border-radius: 999px; background: var(--accent); color: var(--accent-text); transition: background .15s, transform .1s; }
-  .notice button.primary:hover { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
-  .notice button.primary:active:not(:disabled) { transform: scale(.97); }
-  .notice button:disabled { opacity: .5; cursor: default; }
 
   .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-3); }
   .empty svg { width: 36px; height: 36px; margin-bottom: 6px; }
@@ -174,7 +187,7 @@
 </head>
 <body>
 <header>
-  <div class="title"><h1>图片</h1><span class="count" id="count"></span><button class="quiet" id="disable" type="button" hidden>停用</button></div>
+  <div class="title"><h1>图片</h1><span class="count" id="count"></span><div class="actions"><button class="icon-quiet" id="refresh" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button><span class="plugin" id="plugin"></span></div></div>
   <div class="plan" id="plan">正在读取…</div>
   <div class="meter" id="meter" hidden>
     <div class="meter-head"><span id="meterLabel"></span><b id="meterValue"></b><span class="meter-full" id="meterFull"></span></div>
@@ -206,6 +219,7 @@
   const KIND = { upload: "用户上传", view: "查看的图片", generated: "生成的图片", tool: "工具返回" };
   const THUMB_SIDE = 160;
   const POLL_MS = 3000;
+  const STALE_MS = 30000;          // older than this, the 刷新 button turns orange
   const $ = (id) => document.getElementById(id);
   const main = $("main");
 
@@ -237,7 +251,7 @@
       return;
     }
     if (message.method === "ui/notifications/tool-result") ingest(message.params?.structuredContent);
-    else if (message.method === "ui/notifications/host-context-changed") applyHost(message.params);
+    else if (message.method === "ui/notifications/host-context-changed") { applyHost(message.params); nudge(); }
     else if (message.id !== undefined && message.method) post({ id: message.id, result: {} });
   });
   function applyHost(context) {
@@ -256,15 +270,18 @@
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
-    confirmDisable: false,         // the 停用 confirmation is showing
-    switching: false,              // a 启用 / 停用 call is under way
+    confirmDisable: false,         // 停用插件 was clicked once and waits for the second click
+    switching: false,              // a 启用插件 / 停用插件 call is under way
+    manual: false,                 // the running refresh was asked for with the 刷新 button
   };
+  let lastFresh = 0;               // when the panel last received the thread's state
   const images = () => S.data?.images ?? [];
   const byId = (id) => images().find((image) => image.id === id);
   const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : image.checked);
 
   function ingest(state) {
     if (!state || !Array.isArray(state.images)) return;
+    lastFresh = Date.now();
     // Polling mostly returns the same state; leave the page alone then.
     const signature = JSON.stringify(state);
     if (signature === S.signature && !S.error) return;
@@ -283,13 +300,23 @@
   }
 
   let lastRefresh = 0;
-  async function refresh() {
+  async function refresh(manual = false) {
     if (S.refreshing || S.saving) return;
     S.refreshing = true;
+    S.manual = manual;
     lastRefresh = Date.now();
+    renderRefresh();
     try { ingest((await callTool("cam_panel")).structuredContent); }
     catch (error) { S.error = "读取失败：" + error.message; render(); }
-    finally { S.refreshing = false; }
+    finally { S.refreshing = false; S.manual = false; renderRefresh(); }
+  }
+  // Moving to or touching the panel brings it up to date at once, whatever the host does to a background frame's
+  // timers: after a reply, the user looking over is what counts.
+  let nudged = 0;
+  function nudge() {
+    if (Date.now() - nudged < 1500) return;
+    nudged = Date.now();
+    refresh();
   }
 
   function setChecked(id, checked) {
@@ -404,6 +431,11 @@
       : counted.reduce((sum, image) => sum + image.base64Chars, 0);
     return { whole: !!baseline, full, after: Math.max(0, full - saved), sent: counted.length - dropped.length, dropped: dropped.length, duplicates: dropped.filter(sentCopyOf).length, gone: list.length - counted.length };
   }
+  function clockOf(at) {
+    const date = new Date(at);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
   function timeOf(at) {
     const date = new Date(at);
     if (Number.isNaN(date.getTime())) return "";
@@ -460,8 +492,6 @@
   }
 
   function renderHeader() {
-    const setup = S.data?.setup;
-    $("disable").hidden = !setup?.usesEngine || !!setup.changed || S.confirmDisable;
     const list = images();
     const plan = $("plan");
     $("count").textContent = list.length ? String(list.length) : "";
@@ -500,7 +530,7 @@
     if (notices.has(key)) return notices.get(key);
     const box = document.createElement("div");
     notices.set(key, box);
-    box.className = `notice ${tone}${actions.some((action) => action.primary) ? " cta" : ""}`;
+    box.className = `notice ${tone}`;
     const span = document.createElement("span");
     span.className = "grow";
     span.textContent = text;
@@ -509,8 +539,6 @@
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = action.label;
-      if (action.primary) button.className = "primary";
-      if (action.switches) button.dataset.switches = "1";
       button.addEventListener("click", action.run);
       box.append(button);
     }
@@ -520,11 +548,46 @@
   function setupNotices() {
     const setup = S.data?.setup;
     if (!setup) return [];
+    if (S.confirmDisable && setup.usesEngine) return [notice("warn", "停用后，Codex 下次启动时恢复直连，取消勾选的图会照常发送。卸载插件前请先停用。确认停用，请再点一次右上角的“停用插件”；点“启用插件”则保持启用。")];
     if (setup.changed === "enabled") return [notice("info", "已启用。重启 Codex 后生效，取消勾选的图就不再发送了。")];
-    if (setup.changed === "disabled") return [notice("warn", "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。", { label: "重新启用", run: () => switchEngine(true), switches: true })];
-    if (!setup.usesEngine) return [notice("info", "还没有接入 Codex：启用后重启 Codex，取消勾选才会生效。", { label: "启用", run: () => switchEngine(true), primary: true, switches: true })];
-    if (S.confirmDisable) return [notice("warn", "停用后，Codex 下次启动时恢复直连，取消勾选的图会照常发送。卸载插件前请先停用。", { label: "停用", run: () => switchEngine(false), switches: true }, { label: "取消", run: () => { S.confirmDisable = false; render(); } })];
+    if (setup.changed === "disabled") return [notice("warn", "已停用。重启 Codex 后恢复直连，取消勾选不再生效。要卸载插件，现在可以去插件页面移除。")];
+    if (!setup.usesEngine) return [notice("info", "还没有接入 Codex：点右上角的“启用插件”，然后重启 Codex，取消勾选才会生效。")];
     return [];
+  }
+
+  // 启用插件 / 停用插件 sit in the header. 停用 asks for a second click on the same spot; 启用插件 next to it keeps
+  // the plugin on. Rebuilt only when the choice changes, so hover and focus survive the polling.
+  let pluginKey = "";
+  function renderPlugin() {
+    const setup = S.data?.setup;
+    const key = !setup ? "" : !setup.usesEngine ? "off" : S.confirmDisable ? "confirm" : "on";
+    const box = $("plugin");
+    if (key !== pluginKey) {
+      pluginKey = key;
+      const make = (label, className, run) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.className = className;
+        button.addEventListener("click", run);
+        return button;
+      };
+      const keepOn = () => { S.confirmDisable = false; render(); };
+      const askToDisable = () => { S.confirmDisable = true; render(); main.scrollTo({ top: 0 }); };
+      box.replaceChildren(...(key === "on" ? [make("停用插件", "off", askToDisable)]
+        : key === "confirm" ? [make("启用插件", "on", keepOn), make("停用插件", "off confirming", () => switchEngine(false))]
+        : key === "off" ? [make("启用插件", "on", () => switchEngine(true))]
+        : []));
+    }
+    for (const button of box.children) button.disabled = S.switching;
+  }
+
+  function renderRefresh() {
+    const button = $("refresh");
+    const stale = lastFresh > 0 && Date.now() - lastFresh > STALE_MS;
+    button.classList.toggle("spinning", S.refreshing && S.manual);
+    button.classList.toggle("stale", stale && !S.refreshing);
+    button.title = !lastFresh ? "刷新" : `刷新（${stale ? "有一会儿没更新了；" : ""}上次更新 ${clockOf(lastFresh)}）`;
   }
 
   function renderList() {
@@ -559,7 +622,6 @@
     // Only touch the list when its items changed, so scrolling and keyboard focus are kept.
     const current = main.children;
     if (nodes.length !== current.length || nodes.some((node, index) => node !== current[index])) main.replaceChildren(...nodes);
-    for (const button of main.querySelectorAll("button[data-switches]")) button.disabled = S.switching;
     for (const image of list) queueThumb(image.id);
   }
 
@@ -599,7 +661,7 @@
     }
   }
 
-  function render() { renderHeader(); renderList(); renderFooter(); renderViewer(); }
+  function render() { renderHeader(); renderPlugin(); renderRefresh(); renderList(); renderFooter(); renderViewer(); }
 
   let focusBeforeViewer = null;
   function openViewer(id) {
@@ -623,9 +685,13 @@
   $("viewerClose").addEventListener("click", closeViewer);
   $("viewerStage").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeViewer(); });
   $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (S.viewer) closeViewer();
+    else if (S.confirmDisable) { S.confirmDisable = false; render(); }
+  });
   $("undo").addEventListener("click", () => { S.pending.clear(); render(); });
-  $("disable").addEventListener("click", () => { S.confirmDisable = true; render(); main.scrollTo({ top: 0 }); });
+  $("refresh").addEventListener("click", () => refresh(true));
   $("confirm").addEventListener("click", confirm);
 
   // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----
@@ -636,8 +702,15 @@
     .catch(() => {})
     .finally(() => setTimeout(() => { if (!S.data) refresh(); }, 1200));
   // Slower, not stopped, while the page reports itself hidden: a host frame may report that wrongly.
-  setInterval(() => { if (!document.hidden || Date.now() - lastRefresh > 5 * POLL_MS) refresh(); }, POLL_MS);
+  setInterval(() => {
+    if (!document.hidden || Date.now() - lastRefresh > 5 * POLL_MS) refresh();
+    renderRefresh();
+  }, POLL_MS);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  document.documentElement.addEventListener("pointerenter", nudge);
+  document.addEventListener("pointerdown", nudge, { capture: true });
+  window.addEventListener("focus", nudge);
+  main.addEventListener("wheel", nudge, { passive: true });
 })();
 </script>
 </body>
