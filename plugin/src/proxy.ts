@@ -4,6 +4,7 @@
 // P4: the statistics also name the images each full request carried (the panel's size baseline), and note a
 // WebSocket turn that kept running after images were unchecked (it cannot be rewritten).
 // v0.1-3: reports its build and version; POST /__cam/retire hands the port to a newer engine (see engine.ts).
+// v0.1-11: pixel fingerprints go to the shared cache in the data directory, for the panels to reuse.
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
@@ -22,12 +23,12 @@ import { codexHome } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
 import { isEntryPoint } from "./entry.ts";
-import { dataDir, proxyLogDirOf } from "./paths.ts";
+import { dataDir, pixelCacheDirOf, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
 import { connectDirectly, pluginGone, usesEngine } from "./setup.ts";
 import { effectiveSelection, selectionDir } from "./selection.ts";
-import { loadThreadIndex, pixelHashOf, type ThreadIndex } from "./thread-index.ts";
+import { loadThreadIndex, pixelHashOf, setPixelCache, type ThreadIndex } from "./thread-index.ts";
 
 type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
@@ -234,6 +235,7 @@ async function main(): Promise<void> {
   const forceHttp = process.argv.includes("--force-http");
   const dumpDir = process.argv.includes("--dump-requests") ? join(dataDir(), "p2", "requests") : null;
   const sessionsDir = join(codexHome(), "sessions");
+  setPixelCache(pixelCacheDirOf());
   const via = outboundProxy();
   const startedAt = new Date().toISOString();
   // v0.1-3: which code this engine runs, so the plugin can tell when an update needs a new engine.

@@ -4,7 +4,9 @@
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
 // (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
-// does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout).
+// does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout;
+// with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once).
+// The demo task has a name, as if the user had renamed it in Codex (v0.1-9).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
 
@@ -57,6 +59,29 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   turn("t3") + upload("msg_3", "t3", [["blue-circle-copy.png", blue], ["noise-1024.png", testImages.noise()]]) + say("收到。", "t3") +
   turn("t4") + upload("msg_4", "t4", [["settings-screenshot.png", screenshot]]) +
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4"));
+
+// Its name, as Codex keeps it next to the sessions folder (the panel's title).
+writeFileSync(join(root, "session_index.jsonl"), `${JSON.stringify({ id: THREAD, thread_name: "海报配色调整", updated_at: "2026-09-24T10:00:00Z" })}
+`);
+
+// New tasks the user starts after opening the panel on a new chat (?newtask=): Codex files them in today's folder.
+let started = 0;
+function startTasks(count: number): void {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const today = join(root, "sessions", String(now.getFullYear()), pad(now.getMonth() + 1), pad(now.getDate()));
+  mkdirSync(today, { recursive: true });
+  const messages = ["把这张海报改成暖色调，标题再大一点", "另一个窗口里：整理一下设置页的截图"];
+  for (let i = 0; i < count; i++) {
+    const id = `01a0d301-0000-7000-8000-${String(++started).padStart(8, "0")}beef`;
+    const at = new Date(Date.now() - (count - i) * 1000).toISOString();
+    const first = (type: string, payload: object) => `${JSON.stringify({ timestamp: at, type, payload })}
+`;
+    writeFileSync(join(today, `rollout-${at.slice(0, 19).replace(/:/g, "-")}-${id}.jsonl`),
+      first("session_meta", { id, timestamp: at, source: "vscode", thread_source: "user" }) + turn("n1") +
+      line("event_msg", { type: "user_message", message: messages[i] }) + upload(`msg_n${started}`, "n1", [[i ? "settings.png" : "poster.png", i ? screenshot : sunset]]));
+  }
+}
 
 const { callTool, resetSetupBaseline } = await import("../../plugin/src/plugin-server.ts");
 const { imageSizesOf } = await import("../../plugin/src/proxy.ts");
@@ -111,7 +136,9 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   const frame = document.getElementById("app");
   const send = (message) => frame.contentWindow.postMessage({ jsonrpc: "2.0", ...message }, "*");
   // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
-  const call = (name, args) => fetch("/call" + (params.get("thread") === "fresh" ? "?fresh=1" : ""), { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
+  // Each page load gets a thread of its own, so a switch made on an earlier load does not carry over.
+  const fresh = params.get("thread") === "fresh" ? Math.random().toString(16).slice(2, 6).padEnd(4, "0") : null;
+  const call = (name, args) => fetch("/call" + (fresh ? "?fresh=" + fresh : ""), { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
   window.addEventListener("message", async (event) => {
     const m = event.data;
     if (!m || event.source !== frame.contentWindow) return;
@@ -127,6 +154,8 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
       if (params.get("demo") === "preview") d.querySelector('[data-id="IMG-004"] .thumb')?.click();
       if (params.get("demo") === "disabled") d.querySelector("#plugin .off")?.click();
     }, 700);
+    // The user sends the first message on this new chat (or two tasks start at once).
+    if (params.get("newtask")) setTimeout(() => fetch("/newtask?count=" + params.get("newtask"), { method: "POST" }), 1500);
   }
   document.getElementById("theme").onclick = () => { theme = theme === "dark" ? "light" : "dark"; document.body.classList.toggle("dark", theme === "dark"); send({ method: "ui/notifications/host-context-changed", params: { theme } }); };
   document.getElementById("grow").onclick = () => fetch("/grow", { method: "POST" });
@@ -152,6 +181,10 @@ createServer((request, response) => {
     resetSetupBaseline();
     return reply(200, "application/json", "{}");
   }
+  if (request.method === "POST" && request.url?.startsWith("/newtask")) {
+    startTasks(Number(new URL(request.url, "http://x").searchParams.get("count")) || 1);
+    return reply(200, "application/json", "{}");
+  }
   if (request.method === "POST" && request.url === "/grow") {
     // A new turn with one more upload, to watch the panel pick it up by polling.
     extra++;
@@ -160,12 +193,13 @@ createServer((request, response) => {
     return reply(200, "application/json", "{}");
   }
   if (request.method === "POST" && request.url?.startsWith("/call")) {
-    const fresh = request.url.includes("fresh=1");
+    const fresh = new URL(request.url, "http://x").searchParams.get("fresh");
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
       const { name, arguments: args } = JSON.parse(body);
-      const threadMeta = fresh ? { threadId: `${THREAD.slice(0, -4)}f00d`, thread_id: `${THREAD.slice(0, -4)}f00d` } : meta;
+      const freshId = `${THREAD.slice(0, -4)}${fresh}`;
+      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : meta;
       try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, threadMeta, sessionsDir))); }
       catch (error) { reply(200, "application/json", JSON.stringify({ isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })); }
     });

@@ -12,7 +12,9 @@
   v0.1-5 — 启用插件 / 停用插件 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
   The state is polled, and also re-read whenever the user moves to or touches the panel, or presses 刷新.
   v0.1-8 — a panel opened on a new chat before its first message may stay tied to a thread Codex prepared and then
-  replaced; it cannot follow the new one, so it says to reopen.
+  replaced. v0.1-10: such a panel switches to the thread the user starts there (cam_bind): the page notes when it is on
+  screen, and only a thread started meanwhile counts; when several did, the user picks one. v0.1-9: the title shows the
+  task's name.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -57,10 +59,10 @@
 
   header { flex: none; padding: 16px 18px 14px; }
   .title { display: flex; align-items: center; gap: 8px; }
-  .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
-  .count { padding: 0 7px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 20px; font-variant-numeric: tabular-nums; }
+  .title h1 { flex: 0 1 auto; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .count { flex: none; padding: 0 7px; border-radius: 999px; background: var(--bg-soft); color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 20px; font-variant-numeric: tabular-nums; }
   .count:empty { display: none; }
-  .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .actions { flex: none; margin-left: auto; display: flex; align-items: center; gap: 6px; }
   .icon-quiet { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-3); cursor: pointer; display: grid; place-items: center; transition: background .15s, color .15s; }
   .icon-quiet:hover { background: var(--bg-soft); color: var(--text-2); }
   .icon-quiet svg { width: 16px; height: 16px; }
@@ -144,6 +146,12 @@
   .notice.info { background: var(--info-bg); color: var(--text); }
   .notice .grow { flex: 1; }
   .notice button { flex: none; border: 0; background: none; padding: 0; font-weight: 600; cursor: pointer; color: inherit; font-size: 12.5px; }
+  .notice.chooser { flex-direction: column; align-items: stretch; gap: 6px; }
+  .notice .pick { display: flex; gap: 8px; align-items: baseline; width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); text-align: left; font-weight: 500; transition: border-color .15s; }
+  .notice .pick:hover:not(:disabled) { border-color: var(--border-strong); }
+  .notice .pick:disabled { opacity: .5; cursor: default; }
+  .pick .pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick .pick-time { flex: none; color: var(--text-3); font-variant-numeric: tabular-nums; }
 
   .empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--text-3); }
   .empty svg { width: 36px; height: 36px; margin-bottom: 6px; }
@@ -186,7 +194,7 @@
 </head>
 <body>
 <header>
-  <div class="title"><h1>图片</h1><span class="count" id="count"></span><div class="actions"><button class="icon-quiet" id="refresh" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button><span class="plugin" id="plugin"></span></div></div>
+  <div class="title"><h1 id="title">上下文素材</h1><span class="count" id="count"></span><div class="actions"><button class="icon-quiet" id="refresh" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button><span class="plugin" id="plugin"></span></div></div>
   <div class="plan" id="plan">正在读取…</div>
   <div class="meter" id="meter" hidden>
     <div class="meter-head"><span id="meterLabel"></span><b id="meterValue"></b><span class="meter-full" id="meterFull"></span></div>
@@ -270,9 +278,16 @@
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
     switching: false,              // a 启用插件 / 停用插件 call is under way
+    switchingTask: false,          // a cam_bind call is under way
     manual: false,                 // the running refresh was asked for with the 刷新 button
   };
   let lastFresh = 0;               // when the panel last received the thread's state
+  // When this page was on screen (v0.1-10), sent with every read: a panel on a new chat is offered the threads started
+  // meanwhile. [from, to] pairs in ms, newest last; the first reaches back 10 s for a page Codex reloads when the chat
+  // becomes a thread. Once hidden (another chat, another window in front), the page starts a new pair when shown again.
+  const openedAt = Date.now();
+  const shown = [];
+  let screenGap = true;
   const images = () => S.data?.images ?? [];
   const byId = (id) => images().find((image) => image.id === id);
   const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : image.checked);
@@ -304,7 +319,8 @@
     S.manual = manual;
     lastRefresh = Date.now();
     renderRefresh();
-    try { ingest((await callTool("cam_panel")).structuredContent); }
+    noteScreen();
+    try { ingest((await callTool("cam_panel", { shown })).structuredContent); followNewTask(); }
     catch (error) { S.error = "读取失败：" + error.message; render(); }
     finally { S.refreshing = false; S.manual = false; renderRefresh(); }
   }
@@ -343,6 +359,34 @@
     } finally {
       S.saving = false; render();
     }
+  }
+
+  // ---- a panel opened on a new chat follows the thread its first message starts (v0.1-10) ----
+  // The plugin offers only threads started while this page was on screen, so a panel left on another new chat does not
+  // take a task started elsewhere. One: switch to it. Several (e.g. two windows side by side): the user picks one.
+  const onScreen = () => document.visibilityState === "visible" && window.innerWidth > 0 && window.innerHeight > 0;
+  function noteScreen() {
+    const now = Date.now();
+    if (!onScreen()) { screenGap = true; return; }
+    const last = shown[shown.length - 1];
+    if (last && !screenGap) last[1] = now;
+    else {
+      shown.push([shown.length ? now - 2000 : Math.min(openedAt - 10000, now), now]);
+      if (shown.length > 20) shown.shift();
+    }
+    screenGap = false;
+  }
+  const newTasks = () => (S.data?.started === false && !S.data?.switchedFrom ? S.data?.newTasks ?? [] : []);
+  function followNewTask() {
+    const tasks = newTasks();
+    if (tasks.length === 1) switchTo(tasks[0].threadId);
+  }
+  async function switchTo(threadId) {
+    if (S.switchingTask) return;
+    S.switchingTask = true; render();
+    try { ingest((await callTool("cam_bind", { target: threadId })).structuredContent); }
+    catch (error) { S.error = "切换失败：" + error.message; }
+    finally { S.switchingTask = false; render(); }
   }
 
   // 启用 / 停用: Codex reads the setting when it starts, so either one waits for a restart (the notices say so).
@@ -491,6 +535,9 @@
   function renderHeader() {
     const list = images();
     const plan = $("plan");
+    const title = !S.data ? "上下文素材" : S.data.title ?? (S.data.started === false ? "新任务" : "未命名任务");
+    $("title").textContent = title;
+    $("title").title = title;
     $("count").textContent = list.length ? String(list.length) : "";
     if (!S.data || !list.length) {
       plan.textContent = !S.data ? (S.error ? "读取失败" : "正在读取…") : "还没有图片";
@@ -542,6 +589,32 @@
     return box;
   }
 
+  // Several threads started since the panel was opened: which one is this panel's?
+  function chooser(tasks) {
+    const key = `chooser|${tasks.map((task) => `${task.threadId}:${task.title ?? ""}`).join("|")}`;
+    let box = notices.get(key);
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "notice info chooser";
+      const text = document.createElement("span");
+      text.textContent = "刚刚开始了好几个任务，这个面板要显示哪一个？";
+      box.append(text);
+      for (const task of tasks) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "pick";
+        const name = Object.assign(document.createElement("span"), { className: "pick-name", textContent: task.title ?? "新任务" });
+        const time = Object.assign(document.createElement("span"), { className: "pick-time", textContent: clockOf(task.startedAt) });
+        button.append(name, time);
+        button.addEventListener("click", () => switchTo(task.threadId));
+        box.append(button);
+      }
+      notices.set(key, box);
+    }
+    for (const button of box.querySelectorAll("button")) button.disabled = S.switchingTask;
+    return box;
+  }
+
   function setupNotices() {
     const setup = S.data?.setup;
     if (!setup) return [];
@@ -582,7 +655,10 @@
     const nodes = [];
     if (S.error) nodes.push(notice("error", S.error, { label: "重试", run: () => { S.error = null; render(); refresh(); } }));
     nodes.push(...setupNotices());
-    if (S.data?.started === false) nodes.push(notice("info", "这个任务还没开始。发出第一条消息后，如果这里没有出现图片，请关掉这个标签页，再从“插件和 MCP”里打开一次：Codex 有时会给新任务换一个编号，已经打开的面板跟不上。"));
+    if (S.data?.started === false) {
+      const tasks = newTasks();
+      nodes.push(tasks.length > 1 ? chooser(tasks) : notice("info", "这个任务还没开始。发出第一条消息后，这里会自动切到这个任务。"));
+    }
     if (S.data?.engineRunning === false && S.data?.setup?.usesEngine !== false) nodes.push(notice("warn", "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。"));
     const sendNotice = S.data?.send?.notice;
     if (sendNotice?.kind === "skipped") nodes.push(notice("error", `上一次请求（${timeOf(sendNotice.at)}）没能按勾选替换，图片原样发给了模型。原因：${sendNotice.reason}。`));
@@ -688,10 +764,12 @@
     .finally(() => setTimeout(() => { if (!S.data) refresh(); }, 1200));
   // Slower, not stopped, while the page reports itself hidden: a host frame may report that wrongly.
   setInterval(() => {
+    noteScreen();
     if (!document.hidden || Date.now() - lastRefresh > 5 * POLL_MS) refresh();
     renderRefresh();
   }, POLL_MS);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  document.addEventListener("visibilitychange", () => { noteScreen(); if (!document.hidden) refresh(); });
+  window.addEventListener("resize", noteScreen);
   document.documentElement.addEventListener("pointerenter", nudge);
   document.addEventListener("pointerdown", nudge, { capture: true });
   window.addEventListener("focus", nudge);

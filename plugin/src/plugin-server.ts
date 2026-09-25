@@ -6,6 +6,9 @@
 // P4 — the panel page itself (an MCP App resource). cam_panel declares a "thread" entrypoint, so Codex lists the panel
 // under the side panel's New Tab → 插件和 MCP, and the user opens it without the model.
 // v0.1-5 — cam_setup: the panel's 启用 / 停用 point Codex at the engine or back to a direct connection (setup.ts).
+// v0.1-10 — a panel opened on a new chat before its first message is told which threads the user has just started,
+// and switches to one with cam_bind; from then on its calls are about that thread (binding.ts). v0.1-11 — slow calls
+// are logged with their duration; pixel fingerprints are shared with the engine through the data directory.
 // Input: MCP JSON-RPC over stdio. Env: CAM_ENGINE_PORT (default 17891), CAM_NO_ENGINE=1 (tests), CAM_DATA_DIR.
 // Output: tool results; <data dir>/plugin-server.jsonl (events and counts only, no conversation content).
 
@@ -14,11 +17,14 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { codexHome } from "./codexconfig.ts";
+import { bindThread, isUserThread, newThreads, resolveThread } from "./binding.ts";
 import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
-import { dataDir } from "./paths.ts";
+import { dataDir, pixelCacheDirOf } from "./paths.ts";
 import { connectDirectly, useEngine, usesEngine } from "./setup.ts";
+import { hasRollout, readThreadHistory, sessionMetaOf, setPixelCache } from "./thread-index.ts";
+import { threadTitle } from "./thread-names.ts";
 
 type Json = Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +39,7 @@ export const TOOLS = [
     name: "cam_panel",
     title: "上下文素材",
     description: "上下文素材面板：查看这个任务里的历史图片，勾选下一条消息要发给模型的图片。由用户在侧边面板里打开，模型不需要调用。",
-    inputSchema: { type: "object", properties: { ...threadArg } },
+    inputSchema: { type: "object", properties: { ...threadArg, shown: { type: "array", items: { type: "array", items: { type: "number" } }, description: "面板页面显示在屏幕上的时间段（毫秒）；面板调用时带上。" } } },
     _meta: { ui: { resourceUri: PANEL_URI, visibility: ["app"] }, "openai/ui": { entrypoints: [{ type: "thread" }] } },
   },
   {
@@ -55,6 +61,13 @@ export const TOOLS = [
     title: "上下文素材：启用或停用",
     description: "素材面板内部使用：让 Codex 经过本机代理（启用），或者恢复直连（停用），重启 Codex 后生效。只有用户能操作，模型调用会被拒绝。",
     inputSchema: { type: "object", properties: { ...threadArg, enable: { type: "boolean" } }, required: ["enable"] },
+    _meta: APP_ONLY,
+  },
+  {
+    name: "cam_bind",
+    title: "上下文素材：切到新任务",
+    description: "素材面板内部使用：在新任务发出第一条消息之前打开的面板，切到用户刚开始的那个任务。只有用户能操作，模型调用会被拒绝。",
+    inputSchema: { type: "object", properties: { ...threadArg, target: { type: "string" } }, required: ["target"] },
     _meta: APP_ONLY,
   },
 ];
@@ -103,19 +116,43 @@ export function threadOf(args: Json, meta: Json | undefined): string | null {
 }
 
 const summary = (state: PanelState) => `共 ${state.totals.images} 张图，取消了 ${state.totals.unchecked} 张。`;
+const SLOW_MS = 300;
+
+// What a panel on a thread without a rollout is offered: the threads the user started while the panel was on screen.
+function newTasks(sessionsDir: string, shown: unknown): Json[] {
+  return newThreads(sessionsDir, shown).map(({ threadId, startedAt }) => {
+    let title: string | null = null;
+    try { title = threadTitle(sessionsDir, threadId, readThreadHistory(sessionsDir, threadId)); } catch { /* shown by its time */ }
+    return { threadId, startedAt, title };
+  });
+}
 
 export function callTool(name: string, args: Json, meta: Json | undefined, sessionsDir = join(codexHome(), "sessions")): Json {
-  const threadId = threadOf(args, meta);
-  if (!threadId) throw new Error("不知道是哪个任务：缺少 threadId");
+  const own = threadOf(args, meta);
+  if (!own) throw new Error("不知道是哪个任务：缺少 threadId");
+  // A panel switched to a new thread (v0.1-10) keeps sending its own thread id; its calls are about the new one.
+  const threadId = resolveThread(own, sessionsDir);
   const options = { sessionsDir };
+  const panel = (state: PanelState, extra: Json = {}) => ({ ...state, engineRunning, setup: setupState(), ...(threadId === own ? {} : { switchedFrom: own }), ...extra });
   if (name === "cam_panel") {
     const state = loadPanelState(threadId, options);
-    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning, setup: setupState() } };
+    // Only the panel page says when it was on screen; Codex's own first call does not, and gets no list.
+    const offer = !state.started && threadId === own && Array.isArray(args.shown) ? { newTasks: newTasks(sessionsDir, args.shown) } : {};
+    return { content: [{ type: "text", text: summary(state) }], structuredContent: panel(state, offer) };
   }
   if (name === "cam_set_selection") {
     if (fromModel(meta)) throw new Error("只有用户能勾选或取消图片；需要某张图时，请回复“需要 IMG-xxx”。");
     const state = applySelection(threadId, { uncheck: args.uncheck, check: args.check, checkAll: args.checkAll }, options);
-    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning, setup: setupState() } };
+    return { content: [{ type: "text", text: summary(state) }], structuredContent: panel(state) };
+  }
+  if (name === "cam_bind") {
+    if (fromModel(meta)) throw new Error("只有用户能切换面板对应的任务。");
+    const target = String(args.target ?? "");
+    if (hasRollout(sessionsDir, own)) throw new Error("这个面板的任务已经开始了，不用切换。");
+    if (!isUserThread(sessionMetaOf(sessionsDir, target))) throw new Error("只能切到用户自己开始的任务。");
+    bindThread(own, target);
+    const state = loadPanelState(target, options);
+    return { content: [{ type: "text", text: summary(state) }], structuredContent: { ...state, engineRunning, setup: setupState(), switchedFrom: own } };
   }
   if (name === "cam_setup") {
     if (fromModel(meta)) throw new Error("只有用户能启用或停用。");
@@ -123,7 +160,7 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
     // A conflict with the user's own settings throws here, before anything is written.
     const plan = args.enable === true ? useEngine(enginePort) : connectDirectly();
     const state = loadPanelState(threadId, options);
-    return { content: [{ type: "text", text: args.enable === true ? "已启用，重启 Codex 后生效。" : "已停用，重启 Codex 后恢复直连。" }], structuredContent: { ...state, engineRunning, setup: setupState(), notes: plan.notes } };
+    return { content: [{ type: "text", text: args.enable === true ? "已启用，重启 Codex 后生效。" : "已停用，重启 Codex 后恢复直连。" }], structuredContent: panel(state, { notes: plan.notes }) };
   }
   if (name === "cam_image") {
     const image = imageFor(threadId, String(args.id), Number(args.maxSide ?? 160), options);
@@ -146,6 +183,7 @@ function main(): void {
   };
   log({ event: "start", ppid: process.ppid });
   setupState(); // what Codex read when it started this session
+  setPixelCache(pixelCacheDirOf());
   // Codex starts several instances at once; a little jitter keeps them from racing to start the engine.
   setTimeout(supervise, Math.floor(Math.random() * 400));
   // Short enough that a crashed engine is back within Codex's own retry window.
@@ -172,10 +210,14 @@ function main(): void {
         send({ id, error: { code: -32002, message: error instanceof Error ? error.message : String(error) } });
       }
     } else if (method === "tools/call") {
+      const started = performance.now();
       try {
         const result = callTool(params.name, params.arguments ?? {}, params._meta);
-        // The open panel reads its state every few seconds and loads each image once; only changes are worth a line.
-        if (params.name === "cam_set_selection" || params.name === "cam_setup" || fromModel(params._meta)) log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta) });
+        const ms = Math.round(performance.now() - started);
+        // The open panel reads its state every few seconds and loads each image once; only changes, and slow calls
+        // (v0.1-11), are worth a line.
+        if (["cam_set_selection", "cam_setup", "cam_bind"].includes(params.name) || fromModel(params._meta)) log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta), ms });
+        else if (ms >= SLOW_MS) log({ event: "slow", name: params.name, ms });
         send({ id, result });
       } catch (error) {
         log({ event: "tools/call", name: params.name, fromModel: fromModel(params._meta), error: String(error) });

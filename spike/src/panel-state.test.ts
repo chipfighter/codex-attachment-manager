@@ -1,8 +1,10 @@
 // Purpose: P3-3 — the panel's data: image states, the ids the model asked for, check/uncheck, and thumbnails.
-// P4 — previews and other formats, and threads without a rollout yet.
+// P4 — previews and other formats, and threads without a rollout yet. v0.1-9 — the task's name as the title.
 // Input: synthetic rollouts in temporary folders; output: Node test assertions only.
 
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { decodePng } from "../../plugin/src/png.ts";
 import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "../../plugin/src/panel-state.ts";
@@ -102,4 +104,13 @@ test("a thread without a rollout yet shows an empty panel instead of an error, a
   const state = loadPanelState("01a0d301-0000-7000-8000-00000000ffff", options);
   assert.deepEqual([state.images, state.turns, state.totals.images, state.started], [[], 0, 0, false]);
   assert.equal(loadPanelState(THREAD, options).started, true);
+});
+
+test("the title is the task's name, else the start of its first message; a thread that has not started has none", () => {
+  const options = sampleSessions(line("event_msg", { type: "user_message", message: "第一条消息" }));
+  assert.equal(loadPanelState(THREAD, options).title, "第一条消息");
+  writeFileSync(join(dirname(options.sessionsDir), "session_index.jsonl"), `${JSON.stringify({ id: THREAD, thread_name: "改图任务", updated_at: "2026-09-25T10:00:00Z" })}
+`);
+  assert.equal(loadPanelState(THREAD, options).title, "改图任务");
+  assert.equal(loadPanelState("01a0d301-0000-7000-8000-00000000ffff", options).title, null);
 });

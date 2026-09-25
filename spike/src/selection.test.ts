@@ -9,6 +9,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { hasUnchecked } from "../../plugin/src/proxy.ts";
 import { effectiveSelection, readSelection, writeSelection } from "../../plugin/src/selection.ts";
+import { startThread } from "./testfixtures.ts";
 
 const PARENT = "01a0d301-0000-7000-8000-0000000000f0";
 const FORK = "01a0d301-0000-7000-8000-0000000000f1";
@@ -59,8 +60,9 @@ test("a fork of a fork asks its own parent; ordinary threads stay empty and get 
 });
 
 test("a thread whose rollout is not written yet is looked up again later", () => {
-  const { sessionsDir, dir, rollout } = setup();
+  const { sessionsDir, dir } = setup();
   assert.deepEqual(effectiveSelection(LATE, sessionsDir, dir).unchecked, {});
-  rollout(LATE, { forked_from_id: PARENT, timestamp: "2026-09-24T12:00:00Z" });
+  // Codex files a new rollout in today's folder.
+  startThread(sessionsDir, LATE, { forked_from_id: PARENT, timestamp: "2026-09-24T12:00:00Z" });
   assert.deepEqual(Object.values(effectiveSelection(LATE, sessionsDir, dir).unchecked).map((entry) => entry.id), ["IMG-001"]);
 });
