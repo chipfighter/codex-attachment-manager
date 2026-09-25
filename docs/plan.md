@@ -309,3 +309,43 @@ P1 通过后，再按用户的节奏一步步探索改写。
   - 每 3 秒刷新一次，没有变化就不重画。页面报告自己不可见时降到 15 秒一次，因为有的宿主会误报。
 - **取图**：`cam_image`。PNG 超过要求的尺寸就缩小，其他格式原样交给页面，由浏览器缩放。
 - **开发页**：`spike/scripts/panel-dev.ts` 在浏览器里扮演 Codex 的侧边面板，用合成测试图调通页面，不用重启 Codex。页面上的“切换明暗”“加一张图”只用来模拟 Codex 的操作，不会出现在 Codex 里。
+
+## 13. 打包成插件（P5）
+
+### 已查证的事实
+
+依据桌面版 26.917、它自带的命令行 0.155，以及它自带的插件：
+
+- **插件**：插件目录里放 `.codex-plugin/plugin.json`。
+  - 字段有 name、version、description、author、homepage、repository、keywords；`mcpServers` 指向 `.mcp.json`。
+  - `interface` 里有 displayName、shortDescription、longDescription、developerName、category、capabilities、brandColor、logo、composerIcon。
+- **`.mcp.json`**：
+  - 服务的 command、args、cwd（`.` 表示插件目录）、default_tools_approval_mode、startup_timeout_sec；
+  - `env_vars` 是一张白名单，列出允许传给服务的环境变量。
+- **插件市场**：一个目录里的 `.agents/plugins/marketplace.json`，列出其中的插件和它们的相对路径。
+- **命令行**：
+  - `codex plugin marketplace add <本地路径、owner/repo 或 Git 地址>`、`codex plugin add <插件>@<市场>`、`codex plugin remove`、`codex plugin marketplace remove`；
+  - 安装会把插件目录复制到 `~/.codex/plugins/cache/<市场>/<插件>/<版本>/`，并在 config.toml 里写 `[marketplaces.<市场>]` 和 `[plugins."<插件>@<市场>"]`。
+- **桌面版自带的东西**：
+  - 命令行在 `%LOCALAPPDATA%\OpenAI\Codex\bin\<版本号>\codex.exe`；
+  - 自带 Node 24，能直接运行 TypeScript。自带插件用一个 .cmd 启动脚本按顺序找这个 Node。
+- **重启才生效**：正在运行的桌面版不会立即加载新装的插件。
+
+### 设计
+
+- **目录**：
+  - `plugin/` 是插件本体：清单、`.mcp.json`、`scripts/launch.cmd`、`src/`；
+  - 仓库根目录的 `.agents/plugins/marketplace.json` 指向它；
+  - `spike/` 留测试和实验脚本。
+- **启动**：
+  - `.mcp.json` 用 `cmd.exe /d /s /c call ./scripts/launch.cmd ./src/plugin-server.ts` 启动插件服务，`launch.cmd` 优先用 Codex 自带的 Node；
+  - 根目录的 `cam.cmd` 用同一个脚本运行命令行，用户不用另装 Node。
+- **数据目录**：`%LOCALAPPDATA%\codex-attachment-manager`。插件目录会在更新时被 Codex 替换，而且不往 `~/.codex` 里写。
+- **安装顺序**：
+  1. 检查和用户自己设置的冲突，然后备份 config.toml；
+  2. 登记市场，装插件（每次都重装，让 Codex 的副本和仓库一致）；
+  3. 自检装好的副本：用它自己的启动脚本起服务，问工具列表和面板页面；
+  4. 写代理设置；
+  5. 迁移旧的勾选记录，确保引擎在运行。
+- **卸载顺序**：先去掉代理设置，恢复直连；再卸插件、去掉市场。
+- **已知风险**：只在插件页面关掉插件、不运行 uninstall，Codex 会连不上，见 spec.md 第 5 节。
