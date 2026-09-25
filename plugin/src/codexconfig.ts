@@ -3,15 +3,13 @@
 // P2 — also a marked NO_PROXY block in $CODEX_HOME/.env, which Codex loads at startup, so its image generation
 // client (which ignores respect_system_proxy before upstream #47742) reaches the local proxy too.
 // Nothing else in either file is touched.
-// Input (CLI): enable [--port 17891] | disable | status. Codex home comes from CODEX_HOME or %USERPROFILE%\.codex.
-// Output: the edited files. config.toml is copied to local/config-backup/ before every change; .env is never copied
-// or printed, because it may hold credentials — its block is removed byte-exactly instead.
+// P5 — a library only: cam.ts install / uninstall / status use it, and do every write and backup themselves.
+// Input: file texts. Codex home comes from CODEX_HOME or %USERPROFILE%\.codex. Output: next texts and status.
+// .env may hold credentials: it is never copied or printed, and its block is removed byte-exactly.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
 
 export const BEGIN = "# >>> codex-attachment-manager: managed proxy setting, remove it with the tool >>>";
 export const END = "# <<< codex-attachment-manager <<<";
@@ -173,61 +171,3 @@ export function persistedEnv(name: string): string | null {
 export function codexHome(): string {
   return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
 }
-
-function main(): void {
-  const command = process.argv[2];
-  const localRoot = join(resolve(dirname(fileURLToPath(import.meta.url)), "../.."), "local");
-  const config = join(codexHome(), "config.toml");
-  const dotenv = join(codexHome(), ".env");
-  const current = existsSync(config) ? readFileSync(config, "utf8") : "";
-  const currentEnv = existsSync(dotenv) ? readFileSync(dotenv, "utf8") : null;
-  const write = (next: string) => {
-    mkdirSync(join(localRoot, "config-backup"), { recursive: true });
-    const stamp = new Date().toISOString().replaceAll(":", "-");
-    if (existsSync(config)) copyFileSync(config, join(localRoot, "config-backup", `config.toml.${stamp}`));
-    writeFileSync(config, next, "utf8");
-  };
-  // Written through a temporary file, so .env is never left half-written; a file that only held our block is removed.
-  const writeEnv = (next: string) => {
-    if (!next.replace(/^﻿/, "").trim()) { rmSync(dotenv, { force: true }); return; }
-    writeFileSync(`${dotenv}.cam-tmp`, next, "utf8");
-    renameSync(`${dotenv}.cam-tmp`, dotenv);
-  };
-  const userNoProxy = persistedEnv("NO_PROXY");
-  const envStatus = (text: string | null) => ({ dotenvExists: text !== null, noProxy: noProxyStatus(text ?? ""), userNoProxy });
-  if (command === "enable") {
-    const index = process.argv.indexOf("--port");
-    const port = Number(index >= 0 ? process.argv[index + 1] : 17891);
-    // "localhost", not 127.0.0.1: Codex on Windows applies the system proxy's "<local>" bypass only to
-    // host names without a dot, so 127.0.0.1 would be sent to the user's system proxy.
-    const { text, changed } = enableProxy(current, `http://localhost:${port}/backend-api/codex`);
-    // Checked before config.toml is written, so a conflict leaves both files untouched.
-    const env = coversLoopback(userNoProxy) ? { text: currentEnv, changed: false } : enableNoProxy(currentEnv ?? "", noProxyValue(userNoProxy));
-    if (changed) write(text);
-    if (env.changed) writeEnv(env.text!);
-    console.log(JSON.stringify({ command, changed, envChanged: env.changed, ...proxyStatus(text), ...envStatus(env.text) }));
-  } else if (command === "disable") {
-    const { text, changed } = disableProxy(current);
-    const env = currentEnv === null ? { text: null, changed: false } : disableProxy(currentEnv);
-    if (changed) write(text);
-    if (env.changed) writeEnv(env.text!);
-    console.log(JSON.stringify({ command, changed, envChanged: env.changed, ...proxyStatus(text), ...envStatus(existsSync(dotenv) ? env.text : null) }));
-  } else if (command === "mcp-enable") {
-    const name = process.argv[process.argv.indexOf("--name") + 1];
-    const script = resolve(process.argv[process.argv.indexOf("--script") + 1]);
-    if (!process.argv.includes("--name") || !process.argv.includes("--script") || !existsSync(script)) throw new Error("usage: codexconfig.ts mcp-enable --name <server> --script <path to .ts>");
-    const { text, changed } = enableMcpServer(current, name, process.execPath, [script]);
-    if (changed) write(text);
-    console.log(JSON.stringify({ command, changed, mcpServer: name }));
-  } else if (command === "mcp-disable") {
-    const { text, changed } = disableMcpServer(current);
-    if (changed) write(text);
-    console.log(JSON.stringify({ command, changed }));
-  } else if (command === "status") {
-    console.log(JSON.stringify({ command, configExists: existsSync(config), ...proxyStatus(current), mcpServerManaged: current.split(/\r?\n/).some((line) => line.trim() === MCP_BEGIN), ...envStatus(currentEnv) }));
-  } else {
-    throw new Error("usage: codexconfig.ts enable [--port N] | disable | mcp-enable --name <server> --script <path> | mcp-disable | status");
-  }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

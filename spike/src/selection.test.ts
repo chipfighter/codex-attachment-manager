@@ -7,8 +7,8 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { hasUnchecked } from "./proxy.ts";
-import { effectiveSelection, readSelection, writeSelection } from "./selection.ts";
+import { hasUnchecked } from "../../plugin/src/proxy.ts";
+import { effectiveSelection, readSelection, writeSelection } from "../../plugin/src/selection.ts";
 
 const PARENT = "01a0d301-0000-7000-8000-0000000000f0";
 const FORK = "01a0d301-0000-7000-8000-0000000000f1";

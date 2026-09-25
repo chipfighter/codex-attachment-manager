@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, watchForCodex } from "./engine.ts";
-import { readRequestStats, recordRequest } from "./request-stats.ts";
+import { countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, watchForCodex } from "../../plugin/src/engine.ts";
+import { readRequestStats, recordRequest } from "../../plugin/src/request-stats.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -50,7 +50,7 @@ test("ensure starts one engine; a second start on the same port leaves it alone"
   t.after(() => { try { process.kill(first.health!.pid); } catch { /* already gone */ } });
   const again = await ensureEngine({ port });
   assert.deepEqual([again.state, again.health?.pid], ["running", first.health!.pid]);
-  const second = await new Promise<string>((resolve) => execFile(process.execPath, [join(here, "proxy.ts"), "--port", String(port), "--stay"], (_error, stdout) => resolve(stdout)));
+  const second = await new Promise<string>((resolve) => execFile(process.execPath, [join(here, "..", "..", "plugin", "src", "proxy.ts"), "--port", String(port), "--stay"], (_error, stdout) => resolve(stdout)));
   assert.match(second, /"alreadyRunning":true/);
   assert.equal((await engineHealth(port))?.pid, first.health!.pid);
 });

@@ -9,11 +9,11 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { AppServer, findBundledCodex } from "./appserver.ts";
-import { codexHome } from "./codexconfig.ts";
-import { DEFAULT_PORT, engineHealth } from "./engine.ts";
-import { SERVER_NAME } from "./install.ts";
-import { applySelection } from "./panel-state.ts";
-import { dataDir, proxyLogDirOf, requestStatsDirOf } from "./paths.ts";
+import { codexHome } from "../../plugin/src/codexconfig.ts";
+import { DEFAULT_PORT, engineHealth } from "../../plugin/src/engine.ts";
+import { SERVER_NAME } from "../../plugin/src/install.ts";
+import { applySelection } from "../../plugin/src/panel-state.ts";
+import { dataDir, proxyLogDirOf, requestStatsDirOf } from "../../plugin/src/paths.ts";
 import { runTurn, TEST_MODEL, testImages, text } from "./testkit.ts";
 
 type Json = Record<string, any>;
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     "-c", `openai_base_url="http://localhost:${DEFAULT_PORT}/backend-api/codex"`,
     "-c", "features.respect_system_proxy=true",
     "-c", `mcp_servers.${SERVER_NAME}.command=${JSON.stringify(process.execPath)}`,
-    "-c", `mcp_servers.${SERVER_NAME}.args=${JSON.stringify([join(here, "plugin-server.ts")])}`,
+    "-c", `mcp_servers.${SERVER_NAME}.args=${JSON.stringify([join(here, "..", "..", "plugin", "src", "plugin-server.ts")])}`,
     "-c", `mcp_servers.${SERVER_NAME}.default_tools_approval_mode="approve"`,
   ], { NO_PROXY: undefined, no_proxy: undefined }, join(dataDir(), "logs", `p3-selftest-${label}-${startedAt.replaceAll(":", "-")}.log`));
   const threads: Json = {};

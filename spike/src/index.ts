@@ -6,7 +6,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, realpathSync, sta
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { decodePng } from "./png.ts";
+import { decodePng } from "../../plugin/src/png.ts";
 import { fileSha256, pathForViewedImage } from "./viewpaths.ts";
 
 type Json = Record<string, any>;

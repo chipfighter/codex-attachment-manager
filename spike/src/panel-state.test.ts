@@ -4,12 +4,12 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodePng } from "./png.ts";
-import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "./panel-state.ts";
-import { requestStatsDirOf } from "./paths.ts";
-import { recordRequest } from "./request-stats.ts";
+import { decodePng } from "../../plugin/src/png.ts";
+import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "../../plugin/src/panel-state.ts";
+import { requestStatsDirOf } from "../../plugin/src/paths.ts";
+import { recordRequest } from "../../plugin/src/request-stats.ts";
 import { assistant, line, red, sampleSessions, THREAD, turn } from "./testfixtures.ts";
-import { shrink } from "./thumbnail.ts";
+import { shrink } from "../../plugin/src/thumbnail.ts";
 
 const records = (text: string) => text.trim().split("\n").map((raw) => JSON.parse(raw));
 

@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import zlib from "node:zlib";
-import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, outboundProxy, rewriteBody, requestIdentity } from "./proxy.ts";
-import { writeSelection } from "./selection.ts";
+import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
+import { writeSelection } from "../../plugin/src/selection.ts";
 import { png } from "./testkit.ts";
 
 const none = () => null;
