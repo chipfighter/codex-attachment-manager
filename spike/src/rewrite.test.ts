@@ -1,10 +1,11 @@
 // Purpose: P2 — the rewrite rules: only unchecked images change; duplicate vs plain placeholders; locked results.
+// v0.1 — one developer message explains omitted images, so the model does not take back earlier answers.
 // Input: synthetic request items; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { findImages, type ImageRef } from "../../plugin/src/images.ts";
-import { rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
+import { OMISSION_NOTE, rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
 import { png } from "./testkit.ts";
 
 const url = (bytes: Buffer) => `data:image/png;base64,${bytes.toString("base64")}`;
@@ -49,15 +50,41 @@ test("an unchecked upload becomes one plain placeholder in place of Codex's tag,
   const input = items();
   const { describe, keys } = index(input);
   const { items: out, report } = rewriteItems(input, describe, keys("IMG-001", "IMG-004"), noPixels);
-  const parts = texts(out[1]);
+  // out[1] is the inserted explanation (next test); the user message follows it.
+  const parts = texts(out[2]);
   assert.equal(parts.length, 1 + 1 + 3 + 3);
-  assert.match(parts[1], /^\[图片 IMG-001（\[Image #1\]） 未提供｜a\.png｜用户上传｜第 1 轮｜4×4\]\n/);
+  assert.match(parts[1], /^\[图片 IMG-001（\[Image #1\]） 已省略｜a\.png｜用户上传｜第 1 轮｜4×4\]\n原图被用户省略以节省上下文，情况见前面的“上下文管理说明”/);
   assert.match(parts[1], /需要 IMG-001/);
   assert.doesNotMatch(parts[1], /C:\\work/, "no local path in the placeholder");
-  assert.match(texts(out[4])[1], /^\[图片 IMG-004 未提供｜a\.png｜工具查看的图片｜第 1 轮｜4×4\]/);
+  assert.match(texts(out[5])[1], /^\[图片 IMG-004 已省略｜a\.png｜工具查看的图片｜第 1 轮｜4×4\]\n.*需要 IMG-004/s);
   assert.deepEqual(modes(report), [["IMG-001", "plain", null], ["IMG-004", "plain", null]]);
   assert.equal(out[0], input[0], "untouched items keep their identity");
   assert.equal(input[1].content.length, 10, "the input is not mutated");
+});
+
+test("one developer message explains omitted images: seen when they appeared, earlier answers still hold", () => {
+  const input = items();
+  const { describe, keys } = index(input);
+  const { items: out, report } = rewriteItems(input, describe, keys("IMG-001", "IMG-004"), noPixels);
+  assert.deepEqual(out[1], { type: "message", role: "developer", content: [{ type: "input_text", text: OMISSION_NOTE }] });
+  assert.equal(out.filter((item) => item.role === "developer" && item.content[0].text === OMISSION_NOTE).length, 1, "said once, not per image");
+  assert.equal(report.noteAt, 1, "right before the user message of the turn where the first omitted image appeared");
+  assert.match(OMISSION_NOTE, /真实存在，你当时收到并看过/);
+  assert.match(OMISSION_NOTE, /不要因为现在看不到，就认为之前的回答是猜测或错误，也不要收回或道歉/);
+  assert.match(OMISSION_NOTE, /需要 IMG-xxx/);
+});
+
+test("the explanation never splits a tool call from its output, and is left out when only copies are omitted", () => {
+  const input = items();
+  const { describe, keys } = index(input);
+  // IMG-004 alone (with the red upload still sent) is a duplicate: its content stays in view, so no note.
+  assert.equal(rewriteItems(input, describe, keys("IMG-004"), noPixels).report.noteAt, undefined);
+  // The same view_image output without the upload before it: the note goes before that turn's user message.
+  const toolOnly = [input[0], { type: "message", id: "msg_1", role: "user", content: [{ type: "input_text", text: "看看 a.png" }] }, input[3], input[4]];
+  const tool = index(toolOnly);
+  const { items: out, report } = rewriteItems(toolOnly, tool.describe, tool.keys("IMG-001"), noPixels);
+  assert.equal(report.noteAt, 1);
+  assert.deepEqual(out.map((item) => item.type), ["message", "message", "message", "custom_tool_call", "custom_tool_call_output"]);
 });
 
 test("an unchecked copy points at the identical image that is still sent, in either direction", () => {
