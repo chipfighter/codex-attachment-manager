@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findCodexCli, runCodex } from "./codexcli.ts";
 import { codexHome, MCP_BEGIN, noProxyStatus, persistedEnv, proxyStatus } from "./codexconfig.ts";
-import { DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
+import { buildOf, DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
 import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, planUninstall, pluginStatus, type Plan } from "./install.ts";
 import { applySelection, loadPanelState, type PanelState } from "./panel-state.ts";
 import { dataDir, selectionDirOf } from "./paths.ts";
@@ -174,7 +174,8 @@ async function main(): Promise<void> {
     const plan = planInstall({ configText: readConfig(), envText: readEnv(), env, port });
     applyPlan(plan, configFile, envFile);
     const migrated = migrateSelections();
-    const engine = await ensureEngine({ port });
+    // The installed copy runs the engine, as it will when Codex starts it; an older engine still running is replaced.
+    const engine = await ensureEngine({ port, dir: join(installed, "src") });
     console.log(JSON.stringify({ command, steps, configChanged: plan.configChanged, envChanged: plan.envChanged, notes: plan.notes, migratedSelections: migrated, dataDir: dataDir(), engine: engine.state, enginePid: engine.health?.pid ?? null, next: "重启 Codex 后生效。面板在任务右侧的侧边面板：新建标签页 → 插件和 MCP → 上下文素材" }, null, 2));
     return;
   }
@@ -201,7 +202,7 @@ async function main(): Promise<void> {
       plugin: { ...pluginStatus(config), version, cached: existsSync(pluginCacheDir(version)) },
       legacyMcpServer: config.split(/\r?\n/).some((line) => line.trim() === MCP_BEGIN),
       dotenv: noProxyStatus(readEnv() ?? ""),
-      engine: health ? { running: true, pid: health.pid, startedAt: health.startedAt } : { running: false },
+      engine: health ? { running: true, pid: health.pid, startedAt: health.startedAt, version: health.version ?? null, build: health.build ?? null, sameAsInstalled: health.build === buildOf(join(pluginCacheDir(version), "src")) } : { running: false },
       codexCli: findCodexCli(),
       dataDir: dataDir(),
     }, null, 2));
