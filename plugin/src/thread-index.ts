@@ -6,10 +6,12 @@
 // today and yesterday in between; fingerprints can be shared between processes through a cache folder. Rollouts
 // Codex compressed after a week without activity (.jsonl.zst) are read as well.
 // v0.1-10 — the first line of recent rollouts, so a panel opened on a new chat can find the thread that started there.
+// v0.1-12 — archived tasks (<CODEX_HOME>/archived_sessions) are looked up too: a fork's history may start in a page of
+// a task the user has archived since.
 // Input: the sessions directory and a thread id. Output: ThreadIndex (in memory; files are parsed incrementally).
 
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { findImages, type ImageRef } from "./images.ts";
 import { decodePng } from "./png.ts";
@@ -87,10 +89,14 @@ function records(plain: string): Parsed[] {
 // <thread>_<segment>. A fork's history_base points into its parent's segments, so bases are looked up globally.
 // Codex files each rollout under <sessions>/YYYY/MM/DD of the day it was created (local time), so new threads, forks
 // and later pages all land in today's folder: between full walks only today's and yesterday's folders (local and UTC)
-// are listed again. A file moved elsewhere is found by the next full walk, or at once when a read misses it.
-type Tree = { walkedAt: number; segments: Map<string, string>; threadOf: Map<string, string> };
+// are listed again. Archived tasks move to <CODEX_HOME>/archived_sessions, which full walks include (a task's own
+// folder wins). A file moved elsewhere is found by the next full walk, or at once when a read misses it (at most one
+// such extra walk every 5 s, so a history whose page was deleted does not walk the tree on every poll).
+type Tree = { walkedAt: number; missedAt: number; segments: Map<string, string>; threadOf: Map<string, string> };
 const FULL_WALK_MS = 60_000;
+const MISSED_WALK_MS = 5_000;
 const trees = new Map<string, Tree>();
+const archivedOf = (sessionsDir: string) => join(dirname(sessionsDir), "archived_sessions");
 
 export function recentFolders(sessionsDir: string, now = Date.now()): string[] {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -110,12 +116,13 @@ function addSegment(tree: Tree, file: string): void {
   tree.threadOf.set(match[2] ?? match[1], match[1]);
 }
 
-function allSegments(sessionsDir: string, fresh = false): Tree {
+function allSegments(sessionsDir: string, missed = false): Tree {
   const now = Date.now();
   let tree = trees.get(sessionsDir);
-  if (!tree || fresh || now - tree.walkedAt > FULL_WALK_MS) {
-    tree = { walkedAt: now, segments: new Map(), threadOf: new Map() };
-    for (const file of walk(sessionsDir)) addSegment(tree, file);
+  const again = missed && (!tree || now - tree.missedAt >= MISSED_WALK_MS);
+  if (!tree || again || now - tree.walkedAt > FULL_WALK_MS) {
+    tree = { walkedAt: now, missedAt: again ? now : tree?.missedAt ?? 0, segments: new Map(), threadOf: new Map() };
+    for (const file of [...walk(archivedOf(sessionsDir)), ...walk(sessionsDir)]) addSegment(tree, file);
     trees.set(sessionsDir, tree);
     return tree;
   }
@@ -139,7 +146,8 @@ const baseOf = (file: string): Json | null => (records(file)[0]?.type === "sessi
 
 function effective(segments: Map<string, string>, segmentId: string, endOffset = Number.POSITIVE_INFINITY): Parsed[] {
   const file = segments.get(segmentId);
-  if (!file) throw new Error(`rollout segment not found: ${segmentId}`);
+  // Not listed (yet): the caller walks the tree again once.
+  if (!file) throw Object.assign(new Error(`rollout segment not found: ${segmentId}`), { code: "ENOENT" });
   const base = baseOf(file);
   const inherited = base ? effective(segments, base.thread_id, base.end_byte_offset) : [];
   return [...inherited, ...records(file).filter((record) => record.offset < endOffset)];
