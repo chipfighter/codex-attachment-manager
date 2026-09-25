@@ -9,6 +9,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,9 +76,11 @@ export function shouldReplace(running: Health, own: { build: string | null; vers
   return compareVersions(own.version ?? "0.0.0", running.version ?? "0.0.0") >= 0;
 }
 
-// Detached and hidden, so it outlives whoever asked for it (a plugin server instance, the CLI).
+// Detached and hidden, so it outlives whoever asked for it (a plugin server instance, the CLI). Its working folder is
+// not the plugin's: Windows will not delete a folder a running process works in, and Codex replaces the plugin's
+// folder on every update and removes it on uninstall.
 export function spawnEngine(port = DEFAULT_PORT, extraArgs: string[] = [], dir = here): number | undefined {
-  const child = spawn(process.execPath, [join(dir, "proxy.ts"), "--port", String(port), ...extraArgs], { detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn(process.execPath, [join(dir, "proxy.ts"), "--port", String(port), ...extraArgs], { cwd: tmpdir(), detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   return child.pid;
 }

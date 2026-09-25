@@ -39,3 +39,6 @@ jobs:
         run: npm install --global @openai/codex
       - name: Plugin smoke test
         run: node spike/src/plugin-smoke.ts
+      # The one-line install and uninstall scripts of this platform, against a throwaway Codex home.
+      - name: Install script smoke test
+        run: node spike/src/scripts-smoke.ts
