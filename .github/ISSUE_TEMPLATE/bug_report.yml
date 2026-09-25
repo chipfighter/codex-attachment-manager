@@ -1,0 +1,53 @@
+name: 问题反馈 / Bug report
+description: 插件装不上、面板打不开、Codex 连不上，或者结果不对 / Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢反馈。macOS 和 Linux 还没有人实测过，这两个平台上的任何问题都很有用。
+        Thanks! macOS and Linux have not been tested by hand yet, so reports from them help a lot.
+
+        **Codex 连不上时 / If Codex cannot connect:** 先运行卸载命令恢复直连（见 README 的“卸载”），再来提问题。
+        Run the uninstall command from the README first to restore the direct connection.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台 / Platform
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: codex
+    attributes:
+      label: Codex 版本 / Codex version
+      description: 桌面版的版本号，或者 `codex --version` 的输出 / Desktop app version, or the output of `codex --version`
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: 插件版本 / Plugin version
+      placeholder: "0.1.0"
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么 / What happened
+      description: 做了什么，期望什么，实际看到什么 / What you did, what you expected, what you saw
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: 安装状态 / Install status
+      description: |
+        `cam status` 的输出（不含凭据）/ Output of `cam status` (it contains no credentials).
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: |
+        数据目录里 `plugin-server.jsonl` 和 `proxy/<日期>.jsonl` 的最后几十行。日志只记元数据，不含对话内容；贴之前请再看一眼。
+        The last lines of `plugin-server.jsonl` and `proxy/<date>.jsonl` in the data folder. They hold metadata only; please check before pasting.
+      render: text

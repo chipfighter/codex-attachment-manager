@@ -1,0 +1,35 @@
+# Unit tests on the three platforms Codex runs on. Only Windows is tested by hand, so these runs are the first check
+# that the plugin still starts on macOS and Linux.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          # The version Codex ships; the plugin runs TypeScript directly (type stripping).
+          node-version: 24
+      - name: Unit tests
+        working-directory: spike
+        run: node --test

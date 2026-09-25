@@ -1,0 +1,21 @@
+name: 需求建议 / Feature request
+description: 想要的功能，或者现在不好用的地方 / Something you would like it to do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 遇到的问题 / The problem
+      description: 在什么场景下，现在哪里不方便 / When does it get in your way
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 希望怎么解决 / What you would like
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台 / Platform
+      multiple: true
+      options: [Windows, macOS, Linux]

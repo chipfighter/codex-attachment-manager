@@ -20,7 +20,8 @@
   - 再改启动脚本、进程检测、数据目录和代理检测。
 - [ ] **v0.1-5 更方便的安装**：用户不用打开 GitHub，就能把插件装进 Codex，并完成代理设置。
 - [ ] **v0.1-6 在 GitHub 上发布 v0.1**。
-- 待定：许可证；只关插件、不卸载时 Codex 会断连（见 spec.md 第 5 节）。
+- [x] **v0.1-7 许可证和 CI**（用户 2026-09-25 定：MIT，并加上 CI）：`LICENSE`（插件目录里也放一份）；`.github/workflows/ci.yml` 在 Windows、macOS、Linux 上跑单元测试；问题反馈模板，方便 macOS、Linux 用户在 GitHub 上报问题。
+- 待定：只关插件、不卸载时 Codex 会断连（见 spec.md 第 5 节）。
 
 ---
 
