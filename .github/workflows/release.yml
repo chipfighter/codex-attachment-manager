@@ -1,0 +1,53 @@
+# A tag v<version> makes a draft release: CI runs on the three platforms, the tag must match the plugin's version, and
+# the one-line install scripts are attached with the tag written in, so each installs exactly this release. One plugin
+# serves Windows, macOS and Linux (Codex runs it with its own Node); the scripts are what differs per platform.
+# The draft is published by hand after a last look; "releases/latest/download/<script>" then points at it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: The tag must match the plugin's version
+        run: |
+          version=$(node -p "require('./plugin/.codex-plugin/plugin.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then echo "tag $GITHUB_REF_NAME does not match plugin version $version"; exit 1; fi
+      - name: Install scripts for this release
+        run: |
+          mkdir dist
+          for file in install.sh uninstall.sh install.ps1 uninstall.ps1; do
+            sed "s/__CAM_REF__/$GITHUB_REF_NAME/g" "scripts/$file" > "dist/$file"
+          done
+      - name: Release notes from CHANGELOG.md
+        run: |
+          node --input-type=module - > dist/notes.md <<'EOF'
+          import { readFileSync } from "node:fs";
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+          const text = readFileSync("CHANGELOG.md", "utf8");
+          const start = text.search(new RegExp(`^## \\[?${version.replaceAll(".", "\\.")}\\]?`, "m"));
+          if (start < 0) throw new Error(`CHANGELOG.md has no section for ${version}`);
+          const rest = text.slice(start);
+          const next = rest.slice(1).search(/^## /m);
+          process.stdout.write(next < 0 ? rest : rest.slice(0, next + 1));
+          EOF
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/install.sh dist/uninstall.sh dist/install.ps1 dist/uninstall.ps1 --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file dist/notes.md

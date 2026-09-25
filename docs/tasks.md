@@ -25,10 +25,19 @@
   - 引擎用 `ps` 检测 Codex 进程；macOS 读系统代理（`scutil --proxy`）；数据目录按平台惯例；找 Codex 命令行的位置按平台区分；根目录加 POSIX 版 `cam`。
   - `spike/src/plugin-smoke.ts`：用 Codex 自己的命令行把插件装进临时目录，再由 app-server 开任务，确认插件服务起来、工具和面板都在、引擎启动；不用登录。本机桌面版的命令行（0.155.0-alpha）和 CI 上 npm 的命令行（0.157.0，三个平台）都通过，macOS、Linux 上装进缓存后启动脚本仍可执行。
   - 没验证到的：macOS、Linux 桌面版里的面板显示，以及系统代理下 Codex 能否连到本机引擎，要等用户反馈。
-- [ ] **v0.1-5 更方便的安装**：用户不用打开 GitHub，就能把插件装进 Codex，并完成代理设置。
-- [ ] **v0.1-6 在 GitHub 上发布 v0.1**。
+- [x] **v0.1-5 更方便的安装**（`setup.ts`、`panel.html`、`plugin-server.ts`、`scripts/`；新增 3 个单元测试，共 92 个；证据：CI 上三个平台的 `scripts-smoke.ts` 都通过；设计见 plan.md 第 14 节）
+  - 不开终端：桌面版的插件页面能“添加插件市场”（来源填 `chipfighter/codex-attachment-manager`），装好插件后，在面板里点“启用”，重启 Codex。
+  - 面板：
+    - 没接入时显示“启用”；
+    - 标题右侧的“停用”要确认一次；
+    - 启用、停用后提示重启 Codex 生效；
+    - 工具 `cam_setup` 只接受面板的调用。
+  - 一行命令：`install.ps1` / `install.sh` 用 Codex 的命令行装插件，再运行装好的副本里的 `cam setup`；`uninstall.ps1` / `uninstall.sh` 不需要 Node 和插件文件，Codex 连不上时也能恢复。
+  - 插件被移除或关掉却没先停用：macOS、Linux 上引擎会恢复直连；Windows 上引擎随插件服务一起结束（Codex 的 Job 限制），只能靠停用或卸载命令。面板、插件说明和 README 都写了“先停用再移除”。
+  - 顺手修复：引擎的工作目录不再是插件目录；面板开发页的导入路径，以及它改用临时 Codex 目录。
+- [ ] **v0.1-6 在 GitHub 上发布 v0.1**：Release 工作流已备好（`.github/workflows/release.yml`：推 `v0.1.0` 标签后先跑三个平台的 CI，再建草稿 Release，附带写好版本号的四个安装、卸载脚本，说明取自 `CHANGELOG.md`）。发布前还差最后一步【需用户】：README、演示视频、截图、仓库目录结构调整；仓库改成公开。
 - [x] **v0.1-7 许可证和 CI**（用户 2026-09-25 定：MIT，并加上 CI）：`LICENSE`（插件目录里也放一份）；`.github/workflows/ci.yml` 在 Windows、macOS、Linux 上跑单元测试；问题反馈模板，方便 macOS、Linux 用户在 GitHub 上报问题。
-- 待定：只关插件、不卸载时 Codex 会断连（见 spec.md 第 5 节）。
+- 待定：Windows 上不先停用就移除插件，Codex 会断连，只能靠卸载命令恢复；要不要用计划任务让引擎不依赖插件启动，见 spec.md 第 5 节。
 
 ---
 
