@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { callTool } from "../../plugin/src/plugin-server.ts";
+import { callTool, resetSetupBaseline } from "../../plugin/src/plugin-server.ts";
 import { connectDirectly, pluginGone, useEngine, usesEngine } from "../../plugin/src/setup.ts";
 import { sampleSessions, THREAD } from "./testfixtures.ts";
 
@@ -41,9 +41,10 @@ test("启用 points Codex at the engine with a backup first; 停用 gives back t
   assert.equal(existsSync(join(home, "config.toml.cam-tmp")), false, "no temporary file is left behind");
 });
 
-test("only the panel may switch the setting; a call from the model is refused", (t) => {
+test("only the panel may switch the setting; a call from the model is refused; switching back needs no restart", (t) => {
   const { home } = tempHome(t);
   writeFileSync(join(home, "config.toml"), CONFIG);
+  resetSetupBaseline();
   const { sessionsDir } = sampleSessions();
   const panelMeta = { threadId: THREAD };
   const modelMeta = { "x-codex-turn-metadata": { thread_id: THREAD, turn_id: "t9" } };
@@ -53,7 +54,11 @@ test("only the panel may switch the setting; a call from the model is refused", 
   assert.deepEqual(on.setup, { usesEngine: true, changed: "enabled" });
   assert.equal(on.totals.images, 3, "the panel state comes along");
   const off = callTool("cam_setup", { enable: false }, panelMeta, sessionsDir).structuredContent;
-  assert.deepEqual(off.setup, { usesEngine: false, changed: "disabled" });
+  assert.deepEqual(off.setup, { usesEngine: false, changed: null }, "back to what Codex loaded: no restart due");
+  // Starting from a Codex that goes through the engine, 停用插件 is what waits for the restart.
+  useEngine(17891);
+  resetSetupBaseline();
+  assert.deepEqual(callTool("cam_setup", { enable: false }, panelMeta, sessionsDir).structuredContent.setup, { usesEngine: false, changed: "disabled" });
   assert.equal(readFileSync(join(home, "config.toml"), "utf8"), CONFIG);
 });
 

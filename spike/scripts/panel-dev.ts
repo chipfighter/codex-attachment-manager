@@ -4,7 +4,7 @@
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
 // (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
-// does not go through the engine yet, ?demo=disable for the 停用插件 confirmation, ?demo=disabled for right after it).
+// does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout).
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
 // read or changed, whatever is clicked.
 
@@ -58,7 +58,7 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   turn("t4") + upload("msg_4", "t4", [["settings-screenshot.png", screenshot]]) +
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4"));
 
-const { callTool } = await import("../../plugin/src/plugin-server.ts");
+const { callTool, resetSetupBaseline } = await import("../../plugin/src/plugin-server.ts");
 const { imageSizesOf } = await import("../../plugin/src/proxy.ts");
 const { recordRequest } = await import("../../plugin/src/request-stats.ts");
 const { connectDirectly, useEngine } = await import("../../plugin/src/setup.ts");
@@ -110,7 +110,8 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   document.body.classList.toggle("solo", params.has("solo"));
   const frame = document.getElementById("app");
   const send = (message) => frame.contentWindow.postMessage({ jsonrpc: "2.0", ...message }, "*");
-  const call = (name, args) => fetch("/call", { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
+  // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
+  const call = (name, args) => fetch("/call" + (params.get("thread") === "fresh" ? "?fresh=1" : ""), { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
   window.addEventListener("message", async (event) => {
     const m = event.data;
     if (!m || event.source !== frame.contentWindow) return;
@@ -124,9 +125,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
     setTimeout(() => {
       if (params.get("demo") === "pending") d.querySelector('[data-id="IMG-002"] input')?.click();
       if (params.get("demo") === "preview") d.querySelector('[data-id="IMG-004"] .thumb')?.click();
-      if (params.get("demo") === "disable") d.querySelector("#plugin .off")?.click();
-      // Leaves the (temporary) Codex home switched off; restart the page's server for the other states.
-      if (params.get("demo") === "disabled") { d.querySelector("#plugin .off")?.click(); setTimeout(() => d.querySelector("#plugin .off.confirming")?.click(), 150); }
+      if (params.get("demo") === "disabled") d.querySelector("#plugin .off")?.click();
     }, 700);
   }
   document.getElementById("theme").onclick = () => { theme = theme === "dark" ? "light" : "dark"; document.body.classList.toggle("dark", theme === "dark"); send({ method: "ui/notifications/host-context-changed", params: { theme } }); };
@@ -149,6 +148,8 @@ createServer((request, response) => {
   if (request.method === "POST" && request.url?.startsWith("/setup")) {
     // Whether the (temporary) Codex home goes through the engine when the page loads.
     if (new URL(request.url, "http://x").searchParams.get("state") === "off") connectDirectly(); else useEngine(17891);
+    // Each page load starts as a freshly started Codex: nothing waits for a restart.
+    resetSetupBaseline();
     return reply(200, "application/json", "{}");
   }
   if (request.method === "POST" && request.url === "/grow") {
@@ -158,12 +159,14 @@ createServer((request, response) => {
     writeFileSync(file, readFileSync(file, "utf8") + turn(`x${extra}`) + upload(`msg_x${extra}`, `x${extra}`, [[`new-${extra}.png`, png(300, 200, (x, y) => [(x * extra * 40) % 256, (y * 3) % 256, 150])]]));
     return reply(200, "application/json", "{}");
   }
-  if (request.method === "POST" && request.url === "/call") {
+  if (request.method === "POST" && request.url?.startsWith("/call")) {
+    const fresh = request.url.includes("fresh=1");
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
       const { name, arguments: args } = JSON.parse(body);
-      try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, meta, sessionsDir))); }
+      const threadMeta = fresh ? { threadId: `${THREAD.slice(0, -4)}f00d`, thread_id: `${THREAD.slice(0, -4)}f00d` } : meta;
+      try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, threadMeta, sessionsDir))); }
       catch (error) { reply(200, "application/json", JSON.stringify({ isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })); }
     });
     return;

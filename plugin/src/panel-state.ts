@@ -28,8 +28,10 @@ export type SendInfo = {
   last: { at: string; bytesBefore: number; bytesAfter: number; replaced: number; skipped: boolean } | null;
   notice: { kind: "skipped"; at: string; reason: string } | { kind: "websocket"; at: string } | null;
 };
+// started: the thread has a rollout. A panel opened on a new chat before its first message may be tied to a thread
+// Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
 export type PanelState = {
-  threadId: string; turns: number; images: PanelImage[]; requested: string[];
+  threadId: string; started: boolean; turns: number; images: PanelImage[]; requested: string[];
   totals: { images: number; unchecked: number; checkedBytes: number; allBytes: number };
   send: SendInfo;
 };
@@ -113,7 +115,7 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
     };
   });
   return {
-    threadId, turns: index.turns, images, requested,
+    threadId, started: history.length > 0, turns: index.turns, images, requested,
     totals: {
       images: images.length,
       unchecked: images.filter((image) => !image.checked).length,

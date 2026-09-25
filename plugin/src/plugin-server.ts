@@ -77,10 +77,15 @@ export function readResource(uri: string): Json {
 // Whether this instance last found the engine running; null until the first check (and in tests).
 let engineRunning: boolean | null = null;
 const enginePort = Number(process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);
-// v0.1-5: whether config.toml points Codex at the engine, and what the panel's 启用 / 停用 changed since this instance
-// started: Codex reads the setting when it starts, so a change waits for a restart.
-let setupChanged: "enabled" | "disabled" | null = null;
-const setupState = () => ({ usesEngine: usesEngine(), changed: setupChanged });
+// v0.1-5: whether config.toml points Codex at the engine, and whether that differs from what it said when this instance
+// started (about when Codex read it): only a difference waits for a restart, so 停用 then 启用 again needs none.
+let setupBaseline: boolean | null = null;
+export function resetSetupBaseline(): void { setupBaseline = null; }
+function setupState(): { usesEngine: boolean; changed: "enabled" | "disabled" | null } {
+  const now = usesEngine();
+  if (setupBaseline === null) setupBaseline = now;
+  return { usesEngine: now, changed: now === setupBaseline ? null : now ? "enabled" : "disabled" };
+}
 
 function log(entry: Json): void {
   const root = dataDir();
@@ -114,9 +119,9 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
   }
   if (name === "cam_setup") {
     if (fromModel(meta)) throw new Error("只有用户能启用或停用。");
+    setupState(); // the baseline, in case this is the first call
     // A conflict with the user's own settings throws here, before anything is written.
     const plan = args.enable === true ? useEngine(enginePort) : connectDirectly();
-    setupChanged = args.enable === true ? "enabled" : "disabled";
     const state = loadPanelState(threadId, options);
     return { content: [{ type: "text", text: args.enable === true ? "已启用，重启 Codex 后生效。" : "已停用，重启 Codex 后恢复直连。" }], structuredContent: { ...state, engineRunning, setup: setupState(), notes: plan.notes } };
   }
@@ -140,6 +145,7 @@ function main(): void {
     engineRunning = result.state !== "failed";
   };
   log({ event: "start", ppid: process.ppid });
+  setupState(); // what Codex read when it started this session
   // Codex starts several instances at once; a little jitter keeps them from racing to start the engine.
   setTimeout(supervise, Math.floor(Math.random() * 400));
   // Short enough that a crashed engine is back within Codex's own retry window.

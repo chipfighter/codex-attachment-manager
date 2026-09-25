@@ -97,8 +97,9 @@ test("images within the requested size, and formats other than PNG, reach the pa
   assert.throws(() => imageFor(THREAD, "IMG-099", 160, options), /not an image of this thread/);
 });
 
-test("a thread without a rollout yet shows an empty panel instead of an error", () => {
+test("a thread without a rollout yet shows an empty panel instead of an error, and says it has not started", () => {
   const options = sampleSessions();
   const state = loadPanelState("01a0d301-0000-7000-8000-00000000ffff", options);
-  assert.deepEqual([state.images, state.turns, state.totals.images], [[], 0, 0]);
+  assert.deepEqual([state.images, state.turns, state.totals.images, state.started], [[], 0, 0, false]);
+  assert.equal(loadPanelState(THREAD, options).started, true);
 });
