@@ -70,10 +70,25 @@ export type PanelOptions = { sessionsDir: string; dataRoot?: string };
 
 // "需要 IMG-004" or a list right after it ("需要 IMG-004、IMG-002 和 IMG-007"); a full stop ends the list. The English
 // wording (v0.1-14) asks for "need IMG-004", which the model may quote.
+// v0.1-17 (self-test 2026-09-26): the model may also put the ids, or the whole list, in bold ("需要 **IMG-003**"), or ask
+// the user to check them again in the note's own words ("请重新勾选 IMG-003 和 IMG-004", "please check IMG-004 back in",
+// "please restore IMG-004"); "取消勾选" and a state ("已勾选", "没勾选", "was restored") are not asking.
+const MARKS = "[“”\"'‘’「」*_`]*";
+const item = (separators: string) => `(?:\\s*${MARKS}\\s*IMG-\\d{3,}\\s*${MARKS}\\s*(?:${separators})?)`;
+const ZH_LIST = `(${item("[、，,/]|以及|和|与|及")}+)`;
+const EN_LIST = `(${item(",|and")}+)`;
 const ASKED = [
-  /需要((?:\s*[“"'「]?\s*IMG-\d{3,}\s*[”"'」]?\s*(?:[、，,/]|以及|和|与|及)?)+)/g,
-  /\bneeds?((?:\s*["'“”‘’]?\s*IMG-\d{3,}\s*["'“”‘’]?\s*(?:,|and)?)+)/gi,
+  new RegExp(`(?:需要|(?<!取消|已|已经|没|没有|未)(?:重新)?勾选)${ZH_LIST}`, "g"),
+  new RegExp(`\\b(?:needs?|restore|re-?enable|re-?check|re-?select)${EN_LIST}`, "gi"),
+  new RegExp(`\\bcheck${EN_LIST}\\s*(?:back|again)\\b`, "gi"),
 ];
+
+// The ids one reply asks for.
+export function askedIn(text: string): string[] {
+  const ids = new Set<string>();
+  for (const pattern of ASKED) for (const match of text.matchAll(pattern)) for (const id of match[1].matchAll(/IMG-\d{3,}/gi)) ids.add(id[0].toUpperCase());
+  return [...ids];
+}
 
 // Ids the model asked for ("需要 IMG-003") in its latest reply; a turn still running falls back to the one before.
 export function requestedIds(history: Record_[]): string[] {
@@ -88,11 +103,7 @@ export function requestedIds(history: Record_[]): string[] {
       for (const part of record.payload.content ?? []) if (typeof part?.text === "string") current.push(part.text);
     }
   }
-  const ids = new Set<string>();
-  for (const text of current.length ? current : previous) {
-    for (const pattern of ASKED) for (const match of text.matchAll(pattern)) for (const id of match[1].matchAll(/IMG-\d{3,}/gi)) ids.add(id[0].toUpperCase());
-  }
-  return [...ids];
+  return [...new Set((current.length ? current : previous).flatMap(askedIn))];
 }
 
 export function sameContent(index: ThreadIndex, image: IndexedImage): string[] {
