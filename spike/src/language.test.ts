@@ -1,15 +1,15 @@
 // Purpose: v0.1-14 — the plugin speaks Simplified Chinese or English: which language a tag or the system gives, the
 // language the panel reports is remembered, every text exists in both languages with the same {values}, and the text
-// for the model and the plugin's answers follow the language.
-// Input: synthetic tags, environments and temporary data folders; output: Node test assertions only.
+// for the model and the plugin's answers follow the language. v0.1-20 — Codex's own language setting counts too.
+// Input: synthetic tags, environments, Codex settings files and temporary data folders; output: Node test assertions.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { currentLang, langOf, rememberLang, storedLang, systemLang } from "../../plugin/src/language.ts";
+import { codexUiLocale, currentLang, langOf, rememberLang, storedLang, systemLang } from "../../plugin/src/language.ts";
 import { MESSAGES, say } from "../../plugin/src/messages.ts";
 import { callTool, toolsFor } from "../../plugin/src/plugin-server.ts";
 import { OMISSION_NOTE, omissionNote, rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
@@ -27,18 +27,64 @@ test("any Chinese is Simplified Chinese, anything else English; locale variables
 
 test("the language a panel reports is kept, with where it came from; without one the system decides", () => {
   const file = join(mkdtempSync(join(tmpdir(), "cam-lang-")), "language.json");
+  const noSetting = join(dirname(file), "codex-home", "computer-use", "config.json");
   assert.equal(storedLang(file), null);
-  assert.equal(currentLang(file), systemLang());
-  rememberLang("en", "codex", file);
+  assert.equal(currentLang(file, noSetting), systemLang());
+  rememberLang("en", "codex", file, noSetting);
   assert.deepEqual([storedLang(file)?.lang, storedLang(file)?.source], ["en", "codex"]);
-  assert.equal(currentLang(file), "en");
+  assert.equal(currentLang(file, noSetting), "en");
   const written = readFileSync(file, "utf8");
-  rememberLang("en", "codex", file);
+  rememberLang("en", "codex", file, noSetting);
   assert.equal(readFileSync(file, "utf8"), written, "unchanged: not written again");
-  rememberLang("zh", "system", file);
-  assert.deepEqual([currentLang(file), storedLang(file)?.source], ["zh", "system"]);
+  rememberLang("zh", "system", file, noSetting);
+  assert.deepEqual([currentLang(file, noSetting), storedLang(file)?.source], ["zh", "system"]);
   process.env.CAM_LANG = "en";
-  try { assert.deepEqual([currentLang(file), systemLang({ CAM_LANG: "en", LANG: "zh_CN.UTF-8" })], ["en", "en"], "CAM_LANG fixes it (tests, development)"); } finally { delete process.env.CAM_LANG; }
+  try { assert.deepEqual([currentLang(file, noSetting), systemLang({ CAM_LANG: "en", LANG: "zh_CN.UTF-8" })], ["en", "en"], "CAM_LANG fixes it (tests, development)"); } finally { delete process.env.CAM_LANG; }
+});
+
+// v0.1-20 — the desktop app writes its interface language for its Computer Use helper (<CODEX_HOME>/computer-use/
+// config.json). The user's case of 2026-09-26: the panel had reported Chinese; after Codex was set to English, the tab
+// kept its Chinese title until a panel was opened again and Codex restarted.
+test("Codex's own language setting counts before a panel reports one, and again once the user changes it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cam-lang-"));
+  const file = join(dir, "language.json");
+  const setting = join(dir, "codex-home", "computer-use", "config.json");
+  const setTo = (locale: string) => {
+    mkdirSync(dirname(setting), { recursive: true });
+    writeFileSync(setting, `${JSON.stringify({ accentColor: "#339cff", direction: "ltr", locale, strings: {} })}\n`);
+  };
+  assert.deepEqual([codexUiLocale(setting), currentLang(file, setting)], [null, systemLang()], "neither: the system decides");
+  setTo("en-US");
+  assert.deepEqual([codexUiLocale(setting), currentLang(file, setting)], ["en-US", "en"], "before any panel: Codex's setting");
+  setTo("zh-CN");
+  assert.equal(currentLang(file, setting), "zh");
+
+  rememberLang("zh", "codex", file, setting);
+  assert.deepEqual([storedLang(file)?.lang, storedLang(file)?.codexLocale], ["zh", "zh-CN"], "kept beside the setting it was seen with");
+  setTo("en-US");
+  assert.equal(currentLang(file, setting), "en", "the user changed Codex's language since: its setting wins");
+  rememberLang("en", "codex", file, setting);
+  assert.deepEqual([storedLang(file)?.codexLocale, currentLang(file, setting)], ["en-US", "en"], "written again for the new setting");
+
+  // The panel sees what the interface shows, which can differ from the app's locale: it holds while the setting stays.
+  rememberLang("en", "codex", file, setting);
+  setTo("zh-CN");
+  rememberLang("en", "codex", file, setting);
+  assert.equal(currentLang(file, setting), "en");
+
+  // A record from before v0.1-20 (no setting beside it), or one from the system's language only, yields to the setting.
+  // (New files each time: records are cached by modification time, which Windows may not advance between quick writes.)
+  const record = (name: string, value: object) => { const path = join(dir, name); writeFileSync(path, JSON.stringify(value)); return path; };
+  const older = record("older.json", { lang: "en", source: "codex", at: "2026-09-25T12:42:36.434Z" });
+  assert.equal(currentLang(older, setting), "zh");
+  const systemOnly = record("system-only.json", { lang: "en", source: "system", at: "2026-09-26T06:00:00.000Z", codexLocale: "zh-CN" });
+  assert.equal(currentLang(systemOnly, setting), "zh");
+
+  // An unreadable setting is ignored: the record, else the system.
+  writeFileSync(setting, "{not json");
+  assert.deepEqual([codexUiLocale(setting), currentLang(systemOnly, setting)], [null, "en"]);
+  writeFileSync(setting, JSON.stringify({ locale: 7 }));
+  assert.equal(codexUiLocale(setting), null);
 });
 
 test("the plugin's texts exist in both languages with the same {values}", () => {
@@ -61,6 +107,8 @@ test("the tab's title and the tools speak the language; the panel's calls are an
   assert.deepEqual([toolsFor("zh")[0].title, toolsFor("en")[0].title], ["上下文素材", "Context Assets"]);
   const { sessionsDir, dataRoot } = sampleSessions();
   process.env.CAM_DATA_DIR = dataRoot;
+  // A Codex home without a language setting, so this machine's Codex settings do not count.
+  process.env.CODEX_HOME = join(dirname(dataRoot), "codex-home");
   try {
     const model = { "x-codex-turn-metadata": { thread_id: "01a0d301-0000-7000-8000-00000000abcd" } };
     assert.throws(() => callTool("cam_set_selection", { uncheck: ["IMG-001"], lang: "en" }, model, sessionsDir), /Only the user can check or uncheck images; if you need an image, reply "need IMG-xxx"/);
@@ -70,6 +118,7 @@ test("the tab's title and the tools speak the language; the panel's calls are an
     assert.equal(callTool("cam_panel", {}, panel, sessionsDir).content[0].text, "Images: 3, unchecked: 0.", "a call without a language gets the remembered one");
   } finally {
     delete process.env.CAM_DATA_DIR;
+    delete process.env.CODEX_HOME;
   }
 });
 

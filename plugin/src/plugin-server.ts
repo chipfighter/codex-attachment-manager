@@ -10,7 +10,7 @@
 // and switches to one with cam_bind; from then on its calls are about that thread (binding.ts). v0.1-11 — slow calls
 // are logged with their duration; pixel fingerprints are shared with the engine through the data directory.
 // v0.1-14 — the panel reports Codex's interface language with its calls; it is remembered (language.ts), and the tool
-// list (the tab's title), results and refusals speak it (messages.ts).
+// list (the tab's title), results and refusals speak it (messages.ts). v0.1-20 — Codex's language setting counts too.
 // Input: MCP JSON-RPC over stdio. Env: CAM_ENGINE_PORT (default 17891), CAM_NO_ENGINE=1 (tests), CAM_DATA_DIR.
 // Output: tool results; <data dir>/plugin-server.jsonl (events and counts only, no conversation content).
 
@@ -37,7 +37,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const PANEL_URI = "ui://codex-attachment-manager/panel.html";
 export const PANEL_MIME = "text/html;profile=mcp-app";
 const APP_ONLY = { ui: { visibility: ["app"] } };
-// The tool list is read when Codex starts this service: it speaks the language last reported by a panel (or the system's).
+// The tool list speaks the language at the moment Codex starts this service (language.ts). Codex keeps it: desktop 26.924
+// shares it between tasks for up to 30 minutes and ignores notifications that it changed, so after the user changes
+// Codex's language the tab's title follows once Codex restarts.
 export function toolsFor(lang: Lang) {
   const threadArg = { threadId: { type: "string", description: say(lang, "tool.threadId") } };
   const langArg = { lang: { type: "string", description: say(lang, "tool.lang") } };

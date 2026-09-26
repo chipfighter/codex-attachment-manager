@@ -20,7 +20,7 @@ import { findCodexCli, runCodex } from "./codexcli.ts";
 import { codexHome, MCP_BEGIN, noProxyStatus, proxyStatus } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, engineHealth, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
-import { storedLang, systemLang } from "./language.ts";
+import { codexUiLocale, currentLang, storedLang, systemLang } from "./language.ts";
 import { say, type MessageKey } from "./messages.ts";
 import { migrateDataOnce } from "./migrate-data.ts";
 import { MARKETPLACE, PLUGIN, PLUGIN_ID, planInstall, pluginStatus } from "./install.ts";
@@ -202,8 +202,9 @@ async function main(): Promise<void> {
       dotenv: noProxyStatus(readEnv() ?? ""),
       engine: health ? { running: true, pid: health.pid, startedAt: health.startedAt, version: health.version ?? null, build: health.build ?? null, sameAsInstalled: health.build === buildOf(join(pluginCacheDir(version), "src")) } : { running: false },
       codexCli: findCodexCli(),
-      // Codex's interface language as the panel last reported it; the text for the model follows it.
-      language: storedLang() ?? { lang: systemLang(), source: "system", note: t("cli.language.notReported") },
+      // The language the tab's title and the text for the model use, from Codex's language setting and the panel's last
+      // report (language.ts).
+      language: { speaks: currentLang(), codexSetting: codexUiLocale(), panelReport: storedLang() },
       dataDir: dataDir(),
     }, null, 2));
     return;

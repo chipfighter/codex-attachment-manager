@@ -76,7 +76,6 @@ const zh = {
   "cli.list": "、",
   "cli.next.install": "重启 Codex 后生效。面板在任务右侧的侧边面板：新建标签页 → 插件和 MCP → 上下文素材",
   "cli.next.uninstall": "重启 Codex 后生效；引擎会在 Codex 全部退出后自己退出。勾选记录留在数据目录里，不需要可以删掉",
-  "cli.language.notReported": "还没有面板报告过 Codex 的界面语言，暂用系统语言",
 };
 
 const en: Record<keyof typeof zh, string> = {
@@ -144,7 +143,6 @@ const en: Record<keyof typeof zh, string> = {
   "cli.list": ", ",
   "cli.next.install": "Restart Codex for this to take effect. The panel is in the task's side panel: New tab > Plugins and MCP > Context Assets",
   "cli.next.uninstall": "Restart Codex for this to take effect; the engine exits by itself once Codex has quit. Your selections stay in the data folder; delete it if you no longer need them",
-  "cli.language.notReported": "No panel has reported Codex's interface language yet; the system language is used for now",
 };
 
 export type MessageKey = keyof typeof zh;
