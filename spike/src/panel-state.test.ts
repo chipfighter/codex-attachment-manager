@@ -23,6 +23,21 @@ test("the ids the model asked for come from its latest reply only", () => {
   assert.deepEqual(requestedIds(records(turn("t1") + assistant("To answer that I need \"IMG-004\" and IMG-002.", "t1"))), ["IMG-004", "IMG-002"], "the English wording, quoted");
 });
 
+// v0.1-17 — replies seen in the 2026-09-26 self-test (unnamed tool screenshots, all unchecked): the model bolds the ids,
+// or asks the user to check them again instead of writing "需要".
+test("an asked-for id may be in bold, or asked for as checking it again; unchecking or a checked state is not asking", () => {
+  const asked = (reply: string) => requestedIds(records(turn("t1") + assistant(reply, "t1")));
+  assert.deepEqual(asked("需要 **IMG-003**（录像路径所在的设置页）。如果还想让我检查视频设置，也请勾选 **IMG-004**。"), ["IMG-003", "IMG-004"]);
+  assert.deepEqual(asked("我无法根据当前画面确认设置是否已经保存。要我重新查看，请重新勾选 **IMG-003 和 IMG-004**。"), ["IMG-003", "IMG-004"]);
+  assert.deepEqual(asked("To confirm it I need **IMG-004**."), ["IMG-004"]);
+  assert.deepEqual(asked("你取消勾选了 IMG-003，所以现在看不到。IMG-002 已勾选，会照常发送；已勾选 IMG-001，没勾选 IMG-005。"), []);
+  // English: "check it back in", "restore it" (the note says the user "can check it again").
+  assert.deepEqual(asked("Please check **IMG-003** and **IMG-004** back into the conversation. IMG-003 shows the recording path settings, and IMG-004 shows the Video settings page."), ["IMG-003", "IMG-004"]);
+  assert.deepEqual(asked("I can’t see IMG-004 now, so I can’t tell what color the shape is. Please check IMG-004 back in."), ["IMG-004"]);
+  assert.deepEqual(asked("I can’t see that screenshot now because it was left out of the current context. If you want me to check the color, please restore IMG-004."), ["IMG-004"]);
+  assert.deepEqual(asked("IMG-003 was restored earlier, and I will check IMG-004 carefully; I can't see IMG-002 now."), []);
+});
+
 test("panel state lists every image with checked, same-content and requested flags", () => {
   const options = sampleSessions();
   const state = loadPanelState(THREAD, options);

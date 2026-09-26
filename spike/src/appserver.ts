@@ -124,10 +124,11 @@ export class AppServer {
     });
   }
 
-  async initialize(): Promise<Json> {
+  // capabilities: e.g. { experimentalApi: true, requestAttestation: false } for thread/resume with a given history.
+  async initialize(capabilities: Json | null = null): Promise<Json> {
     const result = await this.request("initialize", {
       clientInfo: { name: "codex-attachment-manager-phase0", title: "Codex Attachment Manager (phase 0)", version: "0.0.0" },
-      capabilities: null,
+      capabilities,
     });
     this.notify("initialized");
     return result;
