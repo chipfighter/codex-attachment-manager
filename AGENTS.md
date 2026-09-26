@@ -19,7 +19,7 @@ Codex 上下文素材管理器（暂名）：让用户逐轮决定，Codex 任�
 - 先在 Windows 上开发和测试。技术栈用 TypeScript/Node。
 - 界面开发：Claude 自己截图检查效果；做到界面的关键节点时，截图给用户看，停下来等反馈再继续（用户 2026-09-24 确认）。
 - 测试时调用模型一律用 `gpt-6-sol`，推理强度 `low`，包括脚本自测和桌面版测试，为了省 token（用户 2026-09-24 要求）。
-- 界面和提示文字分简体中文、英文两份：面板的在 `plugin/src/panel.html` 的文字表里，插件服务和命令行的在 `plugin/src/messages.ts`。新增或修改文字时两份一起改，单元测试会检查条目一一对应。改发给模型的占位符和说明（`plugin/src/rewrite.ts`）时，中文、英文（`--lang en`）各跑一次 `spike/src/v01-placeholder-selftest.ts`（用户 2026-09-25 要求）。
+- 界面和提示文字分简体中文、英文两份：面板的在 `plugin/src/panel.html` 的文字表里，插件服务和命令行的在 `plugin/src/messages.ts`。新增或修改文字时两份一起改，单元测试会检查条目一一对应。改发给模型的占位符和说明（`plugin/src/rewrite.ts`）时，中文、英文（`--lang en`）各跑一次 `spike/src/v01-placeholder-selftest.ts`（用户 2026-09-25 要求）和 `spike/src/v01-needs-selftest.ts`（没有名字的工具截图全部取消后，模型能不能按编号要图、面板能不能认出来；用户 2026-09-26 要求）。
 - 分工：Claude 维护 `docs/` 下的规格和方案，并负责开发和测试（阶段 0 的 T0–T2 由 Codex 完成；测试需要在 Codex 之外启动 app-server，所以从 T3 起改由 Claude 执行）。其他协作者不修改 spec.md 和 plan.md。
 
 ## Git 规范
