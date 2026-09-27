@@ -159,6 +159,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   iframe { flex: 1; border: 0; width: 100%; }
   .tools { position: fixed; left: 10px; top: 10px; display: flex; gap: 6px; } .tools button { font: inherit; }
   body.solo .chat, body.solo .tools, body.solo .tabs { display: none; } body.solo .panel { width: 100%; border: 0; }
+  body.sized iframe { flex: none; height: 200px; }
 </style></head><body><div class="tools"><button id="theme">切换明暗</button><button id="grow">加一张图</button></div>
 <div class="chat">（对话区）</div><div class="panel"><div class="tabs"><span class="tab">上下文素材</span></div><iframe id="app"></iframe></div>
 <script>
@@ -170,6 +171,13 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   document.body.classList.toggle("solo", params.has("solo"));
   const frame = document.getElementById("app");
   const send = (message) => frame.contentWindow.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  // ?host=924: like Codex 26.924, which gives the page no fixed height, only the most it may take (containerDimensions),
+  // and shows as much as the page asks for (size-changed): 200 px until it asks. &cap=N caps the frame, as a host may.
+  const sized = params.get("host") === "924";
+  const cap = Number(params.get("cap")) || Infinity;
+  document.body.classList.toggle("sized", sized);
+  const dimensions = () => ({ maxHeight: frame.parentElement.clientHeight - frame.offsetTop, maxWidth: frame.clientWidth });
+  if (sized) window.addEventListener("resize", () => send({ method: "ui/notifications/host-context-changed", params: { containerDimensions: dimensions() } }));
   // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
   // Each page load gets a thread of its own, so a switch made on an earlier load does not carry over.
   const fresh = params.get("thread") === "fresh" ? Math.random().toString(16).slice(2, 6).padEnd(4, "0") : null;
@@ -178,7 +186,8 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   window.addEventListener("message", async (event) => {
     const m = event.data;
     if (!m || event.source !== frame.contentWindow) return;
-    if (m.method === "ui/initialize") send({ id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "panel-dev" }, hostCapabilities: { serverTools: {} }, hostContext: { theme, displayMode: "inline", locale: params.get("lang") === "en" ? "en-US" : "zh-CN" } } });
+    if (m.method === "ui/initialize") send({ id: m.id, result: { protocolVersion: "2026-01-26", hostInfo: { name: "panel-dev" }, hostCapabilities: { serverTools: {} }, hostContext: { theme, displayMode: "inline", locale: params.get("lang") === "en" ? "en-US" : "zh-CN", ...(sized ? { containerDimensions: dimensions() } : {}) } } });
+    else if (m.method === "ui/notifications/size-changed") { if (sized) frame.style.height = Math.min(m.params.height, dimensions().maxHeight, cap) + "px"; }
     else if (m.method === "ui/notifications/initialized") { send({ method: "ui/notifications/tool-result", params: await call("cam_panel", {}) }); demo(); }
     else if (m.method === "tools/call") { const delay = params.get("slow") ? 900 : 60; const result = await call(m.params.name, m.params.arguments); setTimeout(() => send({ id: m.id, result }), delay); }
   });
