@@ -21,7 +21,9 @@
   v0.1-17: with many images, the ones the model asked for ("需要 IMG-xxx") and the user has not checked are listed in
   a bar under the request size; clicking one scrolls the list to its row and flashes the row twice.
   v0.1-18: a checkbox at the end of a turn's line (when it has two or more images that can change) checks or
-  unchecks all of them at once, staged like single changes; it shows a dash while only some are checked.
+  unchecks all of them at once; it shows a dash while only some are checked. v0.1-21: it saves at once, without 确定.
+  v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take, and shows as much as the page asks
+  for (MCP Apps size-changed); the page asks for all of it, and fits a smaller frame if that is what it gets.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -56,6 +58,8 @@
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
+  /* v0.1-21: the height this page asked Codex for (fitFrame), never less than the frame it was given. */
+  html.asks-height, html.asks-height body { height: max(var(--frame-height), 100vh); }
   body {
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--bg); color: var(--text); font: 13px/1.5 var(--font);
@@ -521,7 +525,37 @@
     if (variables && typeof variables === "object") {
       for (const [name, value] of Object.entries(variables)) if (name.startsWith("--") && typeof value === "string") document.documentElement.style.setProperty(name, value);
     }
+    if (context.containerDimensions) fitFrame(context.containerDimensions);
   }
+
+  // ---- v0.1-21: the frame's height ----
+  // Codex 26.924 gives the page no fixed height, only the most it may take (containerDimensions), and shows as much of
+  // the page as it asks for (ui/notifications/size-changed). A page as tall as its frame asked for nothing, and the
+  // panel was cut to 200 px (user 2026-09-27). So the page asks for all it may take; if the frame it then gets is
+  // smaller (a host may cap it), it fits that frame, so the footer stays in view. A fixed height is simply filled.
+  const frame = { asked: 0, timer: 0 };
+  function fitFrame(dimensions) {
+    const height = Math.floor(Number(dimensions.height) || Number(dimensions.maxHeight) || 0);
+    if (height > 0) askFrame(height);
+  }
+  function askFrame(height) {
+    document.documentElement.classList.add("asks-height");
+    document.documentElement.style.setProperty("--frame-height", `${height}px`);
+    if (height === frame.asked) return;
+    frame.asked = height;
+    reportFrame();
+    settleLater();
+  }
+  const reportFrame = () => { if (frame.asked) post({ method: "ui/notifications/size-changed", params: { height: frame.asked } }); };
+  // Judged once the frame has stopped changing: a host may resize it in steps.
+  function settleLater() {
+    clearTimeout(frame.timer);
+    frame.timer = setTimeout(() => {
+      const shown = window.innerHeight;
+      if (shown > 0 && shown < frame.asked) askFrame(shown);
+    }, 1500);
+  }
+  window.addEventListener("resize", () => { if (frame.asked) settleLater(); });
 
   // ---- state ----
   const S = {
@@ -529,6 +563,7 @@
     error: null,                   // { key, message }: said in the current language when drawn
     flash: null,                   // a text key
     pending: new Map(),            // id -> checked, changes not confirmed yet
+    applying: new Map(),           // id -> checked, a turn's change being saved (v0.1-21), shown as done meanwhile
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
@@ -545,7 +580,7 @@
   let screenGap = true;
   const images = () => S.data?.images ?? [];
   const byId = (id) => images().find((image) => image.id === id);
-  const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : image.checked);
+  const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : S.applying.has(image.id) ? S.applying.get(image.id) : image.checked);
 
   function ingest(state) {
     if (!state || !Array.isArray(state.images)) return;
@@ -596,24 +631,28 @@
     render();
   }
 
+  // Saves checks and unchecks (cam_set_selection); returns the thread's state after the change, or null on failure.
+  async function save(check, uncheck) {
+    S.saving = true; render();
+    try {
+      const result = await callTool("cam_set_selection", { uncheck, check });
+      S.flash = "footer.saved";
+      setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
+      return result.structuredContent;
+    } catch (error) {
+      S.error = { key: "error.save", message: error.message };
+      return null;
+    } finally {
+      S.saving = false;
+    }
+  }
+
   async function confirm() {
     if (!S.pending.size || S.saving) return;
     const changes = [...S.pending];
-    S.saving = true; render();
-    try {
-      const result = await callTool("cam_set_selection", {
-        uncheck: changes.filter(([, checked]) => !checked).map(([id]) => id),
-        check: changes.filter(([, checked]) => checked).map(([id]) => id),
-      });
-      S.pending.clear();
-      S.flash = "footer.saved";
-      setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
-      ingest(result.structuredContent);
-    } catch (error) {
-      S.error = { key: "error.save", message: error.message };
-    } finally {
-      S.saving = false; render();
-    }
+    const state = await save(changes.filter(([, checked]) => checked).map(([id]) => id), changes.filter(([, checked]) => !checked).map(([id]) => id));
+    if (state) { S.pending.clear(); ingest(state); }
+    render();
   }
 
   // ---- a panel opened on a new chat follows the thread its first message starts (v0.1-10) ----
@@ -778,14 +817,16 @@
     input.indeterminate = checked > 0 && checked < targets.length;
     input.disabled = S.saving;
   }
-  // Staged like single changes: blue dots, 撤销, and nothing saved before 确定.
-  function setTurn(turn, checked) {
+  // Saved at once, without 确定 (v0.1-21, user 2026-09-27); it replaces changes staged for this turn's images, and
+  // leaves those staged for other images alone.
+  async function setTurn(turn, checked) {
     if (S.saving) return;
-    for (const image of images()) {
-      if (image.turn !== turn || !changeable(image)) continue;
-      if (image.checked === checked) S.pending.delete(image.id); else S.pending.set(image.id, checked);
-    }
-    S.flash = null;
+    const ids = images().filter((image) => image.turn === turn && changeable(image)).map((image) => image.id);
+    if (!ids.length) return;
+    for (const id of ids) { S.pending.delete(id); S.applying.set(id, checked); }
+    const state = await save(checked ? ids : [], checked ? [] : ids);
+    S.applying.clear();
+    if (state) ingest(state);
     render();
   }
 
@@ -1096,7 +1137,7 @@
   if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
   applyLanguage();
   request("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "codex-attachment-manager", version: "0.1.0" }, appCapabilities: {} })
-    .then((init) => { applyHost(init?.hostContext); post({ method: "ui/notifications/initialized", params: {} }); })
+    .then((init) => { applyHost(init?.hostContext); post({ method: "ui/notifications/initialized", params: {} }); reportFrame(); })
     .catch(() => {})
     .finally(() => setTimeout(() => { if (!S.data) refresh(); }, 1200));
   // Slower, not stopped, while the page reports itself hidden: a host frame may report that wrongly.
