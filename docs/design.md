@@ -1,0 +1,154 @@
+# 技术方案
+
+> 目标、约束和验收标准以 [spec.md](spec.md) 为准。本文件说明现在是怎么实现的、为什么这样做。
+> 文中“已查证”的 Codex 行为，都针对桌面版 26.924（自带命令行 0.158）；Codex 更新后可能变化。
+> v0.1 开发过程中的调研和排错经过，归档在 [history/v0.1/](history/v0.1/)，其中 plan.md 是当时逐步写成的完整方案。
+
+## 1. 总体结构
+
+在 Codex 和 OpenAI 之间放一个只在本机监听的代理（引擎）：
+
+1. Codex 照常把完整请求发给引擎；
+2. 引擎按这个任务的勾选，把取消的图换成占位符，再转发给 `chatgpt.com`；
+3. 回复原路返回，由 Codex 照常记进同一个任务。
+
+任务不换，历史和界面都不动，勾选和取消从下一次请求起生效。
+
+另一条路线是在新任务里重建历史（阶段 0 验证过，技术上可行）。没有采用，因为用户要在同一个任务里看到连续的对话，见 [history/v0.1/phase0-report.md](history/v0.1/phase0-report.md)。
+
+| 部分 | 代码（`plugin/src`） | 作用 |
+|---|---|---|
+| 引擎 | `proxy.ts`、`engine.ts` | 本机代理：改写请求、记录每个任务最近一次请求的统计；全机只有一个 |
+| 插件服务 | `plugin-server.ts` | Codex 为每个会话启动的 MCP 服务：拉起并看守引擎，给面板提供数据 |
+| 面板 | `panel.html`、`panel-state.ts` | 侧边面板里的 MCP 应用，以及它要显示的数据 |
+| 任务索引 | `thread-index.ts`、`images.ts`、`thumbnail.ts`、`png.ts`、`thread-names.ts` | 从 Codex 的任务记录里只读地找出图片、编号、生成缩略图、读任务名 |
+| 改写 | `rewrite.ts`、`selection.ts`、`request-stats.ts` | 占位符、说明和标签；勾选状态；请求统计 |
+| 接入和安装 | `codexconfig.ts`、`setup.ts`、`install.ts`、`codexcli.ts`、`cam.ts` | 管理 Codex 配置里带标记的块；用 Codex 的命令行装卸插件；`cam` 命令行 |
+| 其他 | `language.ts`、`messages.ts`、`paths.ts`、`migrate-data.ts`、`binding.ts`、`entry.ts` | 语言、文字表、数据目录、旧数据迁移、新任务绑定 |
+
+引擎和插件服务之间只通过数据目录里的文件共享状态，任何一方不在，另一方都照常工作。
+
+## 2. 接入 Codex
+
+- **地址**：`config.toml` 顶层的 `openai_base_url = "http://localhost:17891/backend-api/codex"`。
+  - 必须以 `/backend-api/codex` 结尾，否则 Codex 会关掉后端专用的接口；引擎把同样的路径转发到 `https://chatgpt.com`。
+  - 写 `localhost` 不写 `127.0.0.1`：Windows 代理设置里的 `<local>` 只让不带点的主机名直连。
+- **`features.respect_system_proxy = true`**：让 Codex 先看 Windows 的代理设置。否则用户环境里有 `HTTP(S)_PROXY`、没有 `NO_PROXY` 时，连本机的请求也会被交给系统代理，然后失败。
+- **`~/.codex/.env` 里的 `NO_PROXY`**：生图、改图的客户端只认环境变量。Codex 启动时会读 `.env`，所以在需要时写一段 `NO_PROXY=localhost,127.0.0.1,::1`，合并用户自己的条目。`.env` 可能含密钥，工具不复制、不输出它。
+- **带标记的块**：上面三处都是工具自己管理、带标记的块。改之前先备份，整个文件写好再替换；恢复时只删掉这些块，绝不用旧备份整体覆盖（Codex 运行时自己也会写 `config.toml`）。用户自己设过 `openai_base_url`，或者把 `respect_system_proxy` 设成了 false，一律不写，直接报告。
+- **经过引擎的接口**：对话走 `…/responses`（默认 WebSocket，失败时回退到 HTTP），历史压缩走 `…/responses/compact`，生图和改图走 `…/images/generations`、`…/images/edits`。
+- **认出任务**：每个请求的 `x-codex-turn-metadata` 请求头里有 `thread_id`、`turn_id`。
+- **往外连**：引擎沿用系统代理：Windows 读注册表；macOS 读 `scutil --proxy`，只认 HTTP(S) 代理；Linux 只看环境变量。遵守 `NO_PROXY`。
+- **副作用**：地址不是官方域名时，Codex 会去掉请求里附带的工具结果元数据（`tool_result_metadata`）。这是随请求上报的内部元数据，模型看不到。
+
+## 3. 找图和编号（任务索引）
+
+- **图片在请求和记录里的样子**：
+  - 用户上传：用户消息里依次是 `<image name=[Image #N] path="…">`、图片、`</image>` 三段。`[Image #N]` 在每条消息里都从 1 开始。
+  - 工具查看和生成：Codex 的工具都经 `exec`（代码模式）调用，图片在 `custom_tool_call_output` 里。查看的文件路径写在调用代码里；生成的图后面跟着一段说明保存路径的文字。
+  - 托管生图的结果（`image_generation_call.result`）是必填字段，换不成文字，所以不能取消。
+- **编号**：从任务的本地记录（rollout，只读）里按顺序找出所有图片出现记录，依次编号 IMG-001、IMG-002……记录只会追加，已有的编号不变。编号只由记录决定，插件服务和引擎各自计算，结果一致，不用共享状态。
+- **请求和记录对得上**：请求里的消息和工具输出带着和本地记录相同的 `id`，所以按“条目 `id` + 图片在条目里的序号”就能对上，不受压缩和位置变化影响。没有 `id` 时用 `call_id`，再没有就用类型、轮次和内容哈希。
+- **内容相同**：先比较 base64 内容的哈希，再比较 PNG 解码后的像素哈希。像素指纹存在数据目录的 `cache/pixels/`，引擎和各个插件服务共用，不存图片内容。
+- **记录的存放**：
+  - `sessions/YYYY/MM/DD`，按创建那天的本地日期分目录；长任务分成好几段。
+  - 分叉任务的前半段历史在父任务的记录里，沿记录开头的 `history_base` 跨任务读取。
+  - 归档的任务挪到 `archived_sessions`，一样要读；新版 Codex 会把一周没动的记录压缩成 `.jsonl.zst`，用 Node 自带的 zstd 解开。
+  - 前面某一段历史找不到了（例如被删掉），就跳过这一段，照常读剩下的，面板上提示。
+- **目录遍历**：完整遍历只做一次，之后只重新列出今天和昨天的目录，每分钟再完整遍历一次作为兜底；读某一段找不到时立刻重新查找，最多每 5 秒一次。
+
+## 4. 改写请求（引擎）
+
+- **只改有取消项的任务**：只处理这些任务的 `/responses` 和 `/responses/compact` 请求：解压（zstd、gzip、br）、解析、替换、重新压缩，然后转发。没有要替换的图时，原样转发原始字节。
+- **替换规则**（`rewrite.ts`，措辞见 spec 的“占位符”一节）：
+  - 取消的图换成一段文字。用户上传的图连同前后两段路径标签一起换掉，占位符里不写本地路径。
+  - 本次请求里还有内容相同、仍在发送的图时，用“重复”占位符指向它；否则用普通占位符。
+  - 有普通占位符时，在第一张被省略的图所在那一轮的用户消息之前，插入一条开发者消息（“上下文管理说明”）。放在开发者消息里，是因为占位符属于用户内容，模型不把它当成证据。
+  - 只要有图被换掉，每张仍在发送、有编号的图前面加一行“已提供”标签（v0.1-25）：重新勾选的图回到原来的位置、夹在占位符中间，没有编号时模型对不上。
+  - 文字跟随界面语言（第 7 节）。勾选状态不变时，改写结果逐字节相同，不影响缓存。
+- **切到 HTTP**：WebSocket 连接上 Codex 只发新增的条目，靠 `previous_response_id` 接上服务端保存的历史，已经发过的图去不掉。所以：
+  - 任务一有取消项，引擎就对它的 WebSocket 握手回 426，Codex 在这个会话里改走 HTTP，每次都发完整历史；
+  - 它已有的 WebSocket 连接，空闲 1.5 秒后由引擎关掉；
+  - 取消时这一轮还在 WebSocket 上进行，剩下的请求仍带着原图，引擎记下来，面板提示；
+  - 没有取消项的任务照常走 WebSocket。
+- **原样放行**：请求解不开或解析失败、含有 JavaScript 表示不了的大整数、找不到本地记录、改写出错，都原样转发并记下原因，面板上提示。
+- **统计**（`request-stats.ts`）：每个任务记最近一次事件和最近一次完整 HTTP 请求：大小、带了哪些图、各多大、替换了哪些。面板用它做发送预览的基准。
+- **日志**：只记元数据：方法、路径、状态、字节数、耗时、任务编号、图片编号和内容哈希的前 16 位。不记认证信息，不记对话内容。`--dump-requests` 只用于合成的测试任务，图片只留哈希和长度。
+- **改写不影响改图**：改图工具从 Codex 本地的历史取最近的图，不看引擎发出的内容。
+
+## 5. 引擎的生命周期
+
+- **全机一个**：监听 17891 端口（`127.0.0.1` 和 `::1`），`/__cam/health` 报告进程、build（运行目录里 .ts 文件的哈希，换行统一成 LF）和版本。
+- **跟着 Codex**：插件服务启动时确保引擎在运行，之后每隔几秒检查一次，崩了就重新拉起。Codex 全部退出后，引擎自己退出。
+- **Windows 的 Job**：插件服务在一个“关闭即结束、不许脱离”的 Job 里，它拉起的引擎随它一起结束，其他会话的插件服务会在几秒内重新拉起。macOS、Linux 上引擎用 `setsid` 脱离进程组。
+- **升级时替换**：插件服务发现引擎的代码和自己不同、版本不低，就请旧引擎退役（`/__cam/retire`）：旧引擎立刻停止监听，把正在进行的请求和 WebSocket 这一轮做完再退出，新引擎马上接手端口。
+- **插件被移除、没先停用**：引擎每 15 秒检查一次，只认明确的迹象：插件缓存目录不在了，或者 `config.toml` 写着 `enabled = false`。连续两次，或者引擎退出前再查一次，就把 Codex 恢复直连。Windows 上引擎通常随插件服务一起被结束，来不及做这一步，所以面板、插件说明和 README 都写“先停用再移除”，卸载命令负责恢复。
+
+## 6. 面板
+
+- **形态**：侧边面板里的 MCP 应用。工具 `cam_panel` 声明 `thread` 入口（`_meta["openai/ui"].entrypoints`），出现在“新建标签页 → 插件和 MCP”里。页面固定为 `ui://codex-attachment-manager/panel.html`，地址一变就可能白屏（上游 #47512）。
+- **不经过模型**：面板的调用不写进聊天记录，不占上下文。每次调用带着面板打开时所在任务的编号（`_meta.threadId`），之后不变。所有面板工具都只给面板用（`visibility: ["app"]`），改动状态的工具拒绝模型调用。
+- **工具**：`cam_panel`（面板数据）、`cam_set_selection`（勾选和取消）、`cam_image`（缩略图和预览）、`cam_setup`（启用和停用）、`cam_bind`（新任务绑定）。
+- **拿数据**：页面访问不了 `localhost`（上游 #45913），所以一律经 Codex 回调插件服务；图片放在工具结果的 `_meta` 里，用 data URL。PNG 超过要求的尺寸就缩小；缩略图只缓存在内存里，不写磁盘。
+- **勾选**：点一下就调用 `cam_set_selection` 保存。保存进行中的点击合并到下一次调用；读数据的过程中开始了保存，这次读到的结果就不用，免得旧状态盖掉刚点的。
+- **刷新**：每 3 秒读一次，没有变化就不重画；页面报告自己不可见时降到 15 秒；用户移进、点击、滚动时立刻读一次。
+- **发送预览**：以引擎记录的上一次完整请求为基准，按当前勾选估算下一次的大小。
+- **“模型需要”提示条**：从模型最近一次回复里认出“需要 IMG-xxx / need IMG-xxx”，也认加粗、引号、reattach、restore 之类的说法；“已上传”“取消勾选”这类描述不算。
+- **任务名**：读 `<CODEX_HOME>/session_index.jsonl`，同一个任务以最后一行为准。
+- **新任务绑定**：在新任务页打开的面板，绑在 Codex 预先准备的任务上，发第一条消息后可能换成另一个任务。
+  - 页面记下自己哪些时间段显示在屏幕上，读数据时带给插件服务。
+  - 面板所在的任务还没有记录时，插件服务找面板显示期间开始的、用户自己开的任务（不是子代理、分叉或后台任务）。只提供最新的一个，以及和它相差 20 秒以内开始的；只有一个就自动切过去。
+  - 绑定记在数据目录的 `bindings/`，只接受面板的调用。
+- **外观和高度**：用 Codex 在握手时给的主题和样式变量。26.924 给的 `containerDimensions` 只有 `maxHeight`，页面按它设高度并用 `ui/notifications/size-changed` 报告。每轮标题行必须是定位容器（`position: relative`）：隐藏的勾选框挂到整个页面上时，焦点一落上去整页就会被滚走（v0.1-23）。
+- **开发页**：`spike/scripts/panel-dev.ts` 在浏览器里扮演 Codex 的侧边面板，用合成测试图调页面，不用重启 Codex。
+
+## 7. 语言
+
+- 以 `zh` 开头的都算简体中文，其他都算英文。
+- **面板**：看 Codex 在 host context 里给的 `locale`，没有就看浏览器语言。
+- **引擎和标签页标题**（`language.ts`），按顺序：
+  1. 面板报告的语言，只要 Codex 的语言设置还是面板报告时那个；
+  2. Codex 的语言设置：桌面版把它写在 `<CODEX_HOME>/computer-use/config.json` 的 `locale` 里（不是公开接口）；
+  3. 面板最后一次报告的语言；
+  4. 系统语言。
+- **标签页标题要重启才换**：标题就是面板工具的 `title`。Codex 把工具定义缓存在应用进程里，最长 30 分钟，收到“工具列表已变”的通知也只记一行日志。
+- **文字表**：插件服务和命令行的在 `messages.ts`，面板的在 `panel.html` 里一段 JSON，发给模型的在 `rewrite.ts`。单元测试检查两种语言的条目一一对应。
+- **命令行**按系统语言；`CAM_LANG=zh|en` 可以固定语言，测试和开发用。
+- **插件清单只能写一种文字**：名称和简介用英文，详细说明先英文、再附一段中文。
+
+## 8. 数据目录
+
+- Windows 是 `%USERPROFILE%\.codex-attachment-manager`，macOS 是 `~/Library/Application Support/codex-attachment-manager`，Linux 按 XDG 是 `~/.local/share/codex-attachment-manager`；`CAM_DATA_DIR` 可以改（测试、开发用）。
+- Windows 上不放在 AppData 下：Codex 是微软商店应用，它启动的程序在 AppData 里新建的文件会被转存到应用的私有目录，Codex 外面的命令行和引擎就看不到了。
+- 里面有：`selection/`（勾选状态，每个任务一个文件，只记取消的识别键）、`bindings/`、`state/requests/`（请求统计）、`cache/pixels/`、`proxy/`（引擎日志）、`plugin-server.jsonl`、`language.json`、`config-backup/`。
+- 分叉任务沿用原任务在分叉那一刻的勾选，之后各管各的。
+- `migrate-data.ts` 在第一次使用时，把旧位置（旧的 AppData 目录和各应用私有目录里的副本）的数据复制过来，用锁文件保证只有一个进程在复制。
+
+## 9. 打包、安装和发布
+
+- **插件市场**：仓库根目录就是插件市场，`.agents/plugins/marketplace.json` 指向 `plugin/`。插件清单在 `plugin/.codex-plugin/plugin.json`，`plugin/.mcp.json` 启动插件服务。
+- **启动**：`.mcp.json` 的命令是 `./scripts/launch`，Windows 上 Codex 按 PATHEXT 找到 `launch.cmd`，macOS、Linux 上运行同名的 POSIX 脚本。两者按同样的顺序找 Node：Codex 传来的路径、桌面版资源目录里的 `cua_node`、primary runtime、PATH 上 24 以上的 `node`。用户不用另装 Node。
+- **安装**（`cam install`，以及发布附带的 `install.ps1` / `install.sh`）：
+  1. 检查和用户自己设置的冲突，备份 `config.toml`；
+  2. 用 Codex 的命令行登记市场、装插件，每次都重装，让 Codex 的副本和仓库一致；
+  3. 自检装好的副本：用它自己的启动脚本起服务，问工具列表和面板页面；
+  4. 写带标记的块；
+  5. 迁移旧的勾选记录，确保引擎在运行。
+- **不开终端的安装**：Codex 的插件页面能添加插件市场（`owner/repo`、Git 地址或本地文件夹），装好后在面板里点“启用插件”，由 `cam_setup` 写带标记的块。启用、停用都要重启 Codex 才生效。
+- **卸载**：先去掉带标记的块、恢复直连，再卸插件和市场。`uninstall.ps1` / `uninstall.sh` 不需要 Node 和插件文件。
+- **Windows PowerShell 5.1**：`irm … | iex` 按 Latin-1 解码，所以两个 `.ps1` 只用 ASCII。
+- **发布**：推送 `v<版本>` 标签后，`release.yml` 先在三个平台跑 CI，核对标签和插件版本一致，把标签写进四个脚本，建一个草稿 Release，说明取自 CHANGELOG.md。人工看过再发布。`releases/latest/download/<脚本>` 始终指向最新的发布。
+
+## 10. 测试
+
+- **单元测试**：`spike/src/*.test.ts`，`cd spike && node --test`。
+- **冒烟测试**：`plugin-smoke.ts` 用 Codex 自己的命令行装插件、用 app-server 开任务，确认插件服务就绪、引擎启动；`scripts-smoke.ts` 真的跑安装、卸载脚本，确认 `config.toml` 和 `.env` 恢复原样。CI 在 Windows、macOS、Linux 上跑这两项和全部单元测试。
+- **模型自测**（规矩见 AGENTS.md）：`v01-placeholder-selftest.ts` 和 `v01-needs-selftest.ts` 启动自己的引擎（独立的端口和数据目录）和 app-server，用合成图片跑多轮对话，检查模型不收回之前的回答、按编号要图、勾回后看图作答。`CAM_TEST_MODEL`、`CAM_TEST_EFFORT` 换模型，`--lang en` 测英文。测完把建的任务归档；遗留的用 `spike/scripts/archive-test-threads.ts` 归档。
+
+## 11. 依赖的 Codex 行为和已知的坑
+
+- **这些都不是公开接口**，Codex 更新后要重新跑一遍测试和自测：`openai_base_url` 的路径要求、请求头里的 `x-codex-turn-metadata`、握手回 426 时改走 HTTP、读取 `.env`、`computer-use/config.json` 里的语言、任务记录的格式（分段、`history_base`、`.jsonl.zst`、归档目录）。
+- **上游问题**：#47512（面板地址变化后白屏）、#45913（页面访问不了 `localhost`）。
+- **桌面版会在用户消息里附一段 “Files mentioned by the user”**，写着上传文件的完整路径。引擎不改用户消息的文字，靠说明里“不要自己用工具去读取”约束模型；模型偶尔仍会自己打开文件。
+- **模型的差别**：小模型在低推理强度下（例如 GPT-6 Luna Light）偶尔会要错图，或者拿到错图时不说“这张里没有”，而是猜一个答案（v0.1-25 的录屏里遇到过）。
+- **桌面版的上下文比自测多**：桌面版每轮还带着电脑操作、浏览器等插件的工具说明（约 1 万 token）。自测为了不让测试模型操作用户的电脑，没开这些插件，所以个别只在桌面版出现的模型行为，自测复现不出来。

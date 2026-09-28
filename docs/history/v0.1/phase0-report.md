@@ -1,7 +1,7 @@
 # 阶段 0 技术验证报告
 
 > 2026-09-24。T0–T2 由 Codex 执行，T3–T10 由 Claude 执行。本报告只写统计和必要的简短摘录，不含原任务的对话原文、图片和本机路径。详细证据都在本机被 git 忽略的 `local/` 目录里（见 [tasks.md](tasks.md) 各项的证据说明）。
-> 验收关卡见 [spec.md](spec.md) 第 4 节，方法见 [plan.md](plan.md)。
+> 验收关卡见 [acceptance.md](acceptance.md)（原 spec.md 第 4 节），方法见 [plan.md](plan.md)。
 
 ## 1. 结论
 

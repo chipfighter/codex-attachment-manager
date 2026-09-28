@@ -224,7 +224,7 @@
 
 ## 已完成：阶段 0 技术验证
 
-> 验收关卡见 [spec.md](spec.md) 第 4 节。
+> 验收关卡见 [acceptance.md](acceptance.md)（原 spec.md 第 4 节）。
 
 ## 执行规则
 

@@ -122,7 +122,7 @@ Your selections and logs stay in the data folder (see [Privacy](#privacy)); dele
 
 ## Development
 
-- `plugin/` is the plugin itself: the MCP server, the engine, the panel and the `cam` command line (runtime code in `plugin/src`). `spike/` holds the tests and experiments, `scripts/` the one-line install and uninstall scripts, and `docs/` the spec, plan and task log (in Chinese; start with [docs/spec.md](docs/spec.md)).
+- `plugin/` is the plugin itself: the MCP server, the engine, the panel and the `cam` command line (runtime code in `plugin/src`). `spike/` holds the tests and experiments, `scripts/` the one-line install and uninstall scripts, and `docs/` the spec and the technical design (in Chinese; start with [docs/spec.md](docs/spec.md)). The development records of v0.1 are in `docs/history/v0.1/`.
 - Install from source into your Codex: quit Codex, run `cam install` in the repository (`./cam install` on macOS and Linux), then start Codex. `cam status` shows the installation, `cam uninstall` removes it.
 - Run the tests with Node 24 or later: `cd spike && node --test`. CI runs them on Windows, macOS and Linux, then installs the plugin with Codex's CLI and runs the install and uninstall scripts.
 - Work on the panel without Codex: `node spike/scripts/panel-dev.ts`, then open `http://127.0.0.1:17895/?solo=1`. The page uses synthetic images and a temporary Codex folder, so your real data is never read or changed.
