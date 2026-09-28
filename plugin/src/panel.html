@@ -6,7 +6,7 @@
 <title>上下文素材</title>
 <!--
   Purpose: P4 — the context-material panel inside Codex Desktop's side panel (an MCP App). It lists the thread's
-  images in history order; the user previews them, checks or unchecks them, and confirms. Nothing is sent to the model.
+  images in history order; the user previews them and checks or unchecks them. Nothing is sent to the model.
   Input: the MCP Apps bridge (postMessage) — Codex's call of cam_panel, and our own calls of cam_panel, cam_image and
   cam_set_selection. Output: selection changes through cam_set_selection. Self-contained: no network, no storage.
   v0.1-5 — 启用插件 / 停用插件 (cam_setup): point Codex at the engine, or back to a direct connection before uninstalling.
@@ -21,7 +21,8 @@
   v0.1-17: with many images, the ones the model asked for ("需要 IMG-xxx") and the user has not checked are listed in
   a bar under the request size; clicking one scrolls the list to its row and flashes the row twice.
   v0.1-18: a checkbox at the end of a turn's line (when it has two or more images that can change) checks or
-  unchecks all of them at once; it shows a dash while only some are checked. v0.1-21: it saves at once, without 确定.
+  unchecks all of them at once; it shows a dash while only some are checked.
+  v0.1-22 (user 2026-09-28): every check or uncheck, one image or a whole turn, is saved at once; no 确定, no 撤销.
   v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take, and shows as much as the page asks
   for (MCP Apps size-changed); the page asks for all of it, and fits a smaller frame if that is what it gets.
 -->
@@ -120,7 +121,6 @@
 
   .row { position: relative; display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; transition: background .15s; }
   .row:hover { background: var(--bg-hover); }
-  .row.pending { background: var(--info-bg); }
   /* Two flashes on the row picked in the bar above. */
   .row.flash { animation: flash 1.2s ease-in-out; }
   @keyframes flash {
@@ -149,7 +149,6 @@
   .info { display: block; flex: 1; min-width: 0; }
   .line1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 14px; line-height: 20px; }
   .id { flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .row.pending .id::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 6px 2px 0; border-radius: 50%; background: var(--info); vertical-align: middle; }
   .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
   .meta { display: block; margin-top: 2px; color: var(--text-3); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .row.off .id, .row.off .name { color: var(--text-3); }
@@ -190,18 +189,7 @@
 
   footer { flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 14px 12px 18px; border-top: 1px solid var(--border); background: var(--bg); }
   .status { flex: 1; min-width: 0; color: var(--text-3); font-size: 12.5px; }
-  .status.pending { color: var(--text-2); }
-  .status.pending::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%; background: var(--info); vertical-align: middle; }
   .status.ok { color: var(--ok); }
-  .btn {
-    height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; cursor: pointer;
-    font-size: 13px; font-weight: 500; white-space: nowrap; transition: background .15s, color .15s, transform .1s;
-  }
-  .btn:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
-  .btn:active:not(:disabled) { transform: scale(.97); }
-  .btn.primary { padding: 0 18px; background: var(--accent); color: var(--accent-text); }
-  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 84%, var(--bg)); }
-  .btn:disabled, .btn.primary:disabled { background: var(--bg-soft); color: var(--text-3); cursor: default; }
   [hidden] { display: none !important; }
 
   .viewer { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; background: rgb(19 19 19); color: rgb(245 245 245); }
@@ -236,8 +224,6 @@
 <main id="main"></main>
 <footer>
   <div class="status" id="status"></div>
-  <button class="btn" id="undo" hidden>撤销</button>
-  <button class="btn primary" id="confirm" disabled>确定</button>
 </footer>
 <div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="图片预览">
   <div class="viewer-top">
@@ -321,11 +307,8 @@
       "chooser.title": "刚刚开始了好几个任务，这个面板要显示哪一个？",
       "chooser.untitled": "新任务",
       "footer.saving": "正在保存…",
-      "footer.pending": "有 {count} 处改动，点“确定”后生效",
       "footer.saved": "已保存，从下一条消息开始生效",
       "footer.hint": "勾选的图片会随下一条消息发给模型",
-      "button.undo": "撤销",
-      "button.confirm": "确定",
       "viewer.label": "图片预览",
       "viewer.close": "关闭预览",
       "viewer.closeTitle": "关闭（Esc）",
@@ -410,12 +393,8 @@
       "chooser.title": "Several tasks just started. Which one should this panel show?",
       "chooser.untitled": "New task",
       "footer.saving": "Saving…",
-      "footer.pending": "{count} changes; click \"Confirm\" to apply them",
-      "footer.pending_one": "{count} change; click \"Confirm\" to apply it",
       "footer.saved": "Saved; applies from the next message",
       "footer.hint": "Checked images go to the model with the next message",
-      "button.undo": "Undo",
-      "button.confirm": "Confirm",
       "viewer.label": "Image preview",
       "viewer.close": "Close preview",
       "viewer.closeTitle": "Close (Esc)",
@@ -472,8 +451,6 @@
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
     document.title = t("page.title");
     $("refresh").setAttribute("aria-label", t("refresh"));
-    $("undo").textContent = t("button.undo");
-    $("confirm").textContent = t("button.confirm");
     $("viewer").setAttribute("aria-label", t("viewer.label"));
     $("viewerClose").setAttribute("aria-label", t("viewer.close"));
     $("viewerClose").title = t("viewer.closeTitle");
@@ -562,8 +539,7 @@
     data: null, threadId: null,
     error: null,                   // { key, message }: said in the current language when drawn
     flash: null,                   // a text key
-    pending: new Map(),            // id -> checked, changes not confirmed yet
-    applying: new Map(),           // id -> checked, a turn's change being saved (v0.1-21), shown as done meanwhile
+    unsaved: new Map(),            // id -> checked, clicked and shown already, saved by the next call (v0.1-22)
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
     refreshing: false, saving: false,
@@ -580,7 +556,7 @@
   let screenGap = true;
   const images = () => S.data?.images ?? [];
   const byId = (id) => images().find((image) => image.id === id);
-  const isChecked = (image) => (S.pending.has(image.id) ? S.pending.get(image.id) : S.applying.has(image.id) ? S.applying.get(image.id) : image.checked);
+  const isChecked = (image) => (S.unsaved.has(image.id) ? S.unsaved.get(image.id) : image.checked);
 
   function ingest(state) {
     if (!state || !Array.isArray(state.images)) return;
@@ -590,14 +566,14 @@
     if (signature === S.signature && !S.error) return;
     S.signature = signature;
     if (S.threadId && state.threadId !== S.threadId) {
-      S.pending.clear(); S.thumbs.clear(); thumbQueue.length = 0; thumbsInFlight.clear(); closeViewer();
+      S.unsaved.clear(); S.thumbs.clear(); thumbQueue.length = 0; thumbsInFlight.clear(); closeViewer();
     }
     S.threadId = state.threadId;
     S.data = state;
     S.error = null;
-    for (const [id, checked] of S.pending) {
+    for (const [id, checked] of S.unsaved) {
       const image = byId(id);
-      if (!image || !image.replaceable || image.checked === checked) S.pending.delete(id);
+      if (!image || !image.replaceable || image.checked === checked) S.unsaved.delete(id);
     }
     render();
   }
@@ -610,7 +586,13 @@
     lastRefresh = Date.now();
     renderRefresh();
     noteScreen();
-    try { ingest((await callTool("cam_panel", { shown })).structuredContent); followNewTask(); }
+    const started = Date.now();
+    try {
+      const state = (await callTool("cam_panel", { shown })).structuredContent;
+      // A save that began meanwhile may be missing from this state; the save's own answer, or the next read, shows it.
+      if (lastSaveStarted <= started) ingest(state);
+      followNewTask();
+    }
     catch (error) { S.error = { key: "error.load", message: error.message }; render(); }
     finally { S.refreshing = false; S.manual = false; renderRefresh(); }
   }
@@ -623,35 +605,44 @@
     refresh();
   }
 
-  function setChecked(id, checked) {
-    const image = byId(id);
-    if (!image || !image.replaceable || S.saving) return;
-    if (image.checked === checked) S.pending.delete(id); else S.pending.set(id, checked);
+  // ---- checking and unchecking: saved at once (v0.1-22, user 2026-09-28: no 确定, no 撤销) ----
+  // A click shows at once; clicks made while a save is under way go out together right after it.
+  let lastSaveStarted = 0, flashTimer = 0;
+  const setChecked = (id, checked) => change([id], checked);
+  function change(ids, checked) {
+    const targets = ids.filter((id) => byId(id)?.replaceable);
+    if (!targets.length) return;
+    for (const id of targets) S.unsaved.set(id, checked);
     S.flash = null;
     render();
+    flush();
   }
-
-  // Saves checks and unchecks (cam_set_selection); returns the thread's state after the change, or null on failure.
-  async function save(check, uncheck) {
-    S.saving = true; render();
-    try {
-      const result = await callTool("cam_set_selection", { uncheck, check });
-      S.flash = "footer.saved";
-      setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
-      return result.structuredContent;
-    } catch (error) {
-      S.error = { key: "error.save", message: error.message };
-      return null;
-    } finally {
-      S.saving = false;
+  async function flush() {
+    if (S.saving) return;
+    let failed = false;
+    while (S.unsaved.size && !failed) {
+      const batch = [...S.unsaved];
+      S.saving = true; lastSaveStarted = Date.now(); renderFooter();
+      try {
+        const result = await callTool("cam_set_selection", {
+          check: batch.filter(([, checked]) => checked).map(([id]) => id),
+          uncheck: batch.filter(([, checked]) => !checked).map(([id]) => id),
+        });
+        // An image clicked again meanwhile keeps its newer choice, which the next round saves.
+        for (const [id, checked] of batch) if (S.unsaved.get(id) === checked) S.unsaved.delete(id);
+        S.flash = "footer.saved";
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
+        ingest(result.structuredContent);
+      } catch (error) {
+        // The list goes back to what is saved, and the error says why.
+        failed = true;
+        S.unsaved.clear();
+        S.error = { key: "error.save", message: error.message };
+      } finally {
+        S.saving = false;
+      }
     }
-  }
-
-  async function confirm() {
-    if (!S.pending.size || S.saving) return;
-    const changes = [...S.pending];
-    const state = await save(changes.filter(([, checked]) => checked).map(([id]) => id), changes.filter(([, checked]) => !checked).map(([id]) => id));
-    if (state) { S.pending.clear(); ingest(state); }
     render();
   }
 
@@ -815,19 +806,10 @@
     const input = box.querySelector("input");
     input.checked = checked > 0 && checked === targets.length;
     input.indeterminate = checked > 0 && checked < targets.length;
-    input.disabled = S.saving;
   }
-  // Saved at once, without 确定 (v0.1-21, user 2026-09-27); it replaces changes staged for this turn's images, and
-  // leaves those staged for other images alone.
-  async function setTurn(turn, checked) {
-    if (S.saving) return;
-    const ids = images().filter((image) => image.turn === turn && changeable(image)).map((image) => image.id);
-    if (!ids.length) return;
-    for (const id of ids) { S.pending.delete(id); S.applying.set(id, checked); }
-    const state = await save(checked ? ids : [], checked ? [] : ids);
-    S.applying.clear();
-    if (state) ingest(state);
-    render();
+  // Saved at once, like every check (v0.1-21, user 2026-09-27).
+  function setTurn(turn, checked) {
+    change(images().filter((image) => image.turn === turn && changeable(image)).map((image) => image.id), checked);
   }
 
   function paintThumb(row, id) {
@@ -846,14 +828,13 @@
   function paintRow(row, image) {
     const checked = isChecked(image);
     row.classList.toggle("off", !checked);
-    row.classList.toggle("pending", S.pending.has(image.id));
     row.querySelector(".thumb").setAttribute("aria-label", t("row.preview", { id: image.id }));
     row.querySelector(".id").textContent = image.id;
     row.querySelector(".name").textContent = image.name ?? t("row.unnamed");
     row.querySelector(".meta").textContent = describe(image);
     const input = row.querySelector("input");
     input.checked = checked;
-    input.disabled = !image.replaceable || S.saving;
+    input.disabled = !image.replaceable;
     input.setAttribute("aria-label", t("row.send", { id: image.id }));
     row.querySelector(".check").classList.toggle("locked", !image.replaceable);
     const tags = row.querySelector(".tags");
@@ -1070,15 +1051,10 @@
 
   function renderFooter() {
     const status = $("status");
-    const count = S.pending.size;
     status.className = "status";
     if (S.saving) status.textContent = t("footer.saving");
-    else if (count) { status.textContent = t("footer.pending", { count }); status.classList.add("pending"); }
     else if (S.flash) { status.textContent = t(S.flash); status.classList.add("ok"); }
     else status.textContent = images().length ? t("footer.hint") : "";
-    $("undo").hidden = !count;
-    $("undo").disabled = S.saving;
-    $("confirm").disabled = !count || S.saving;
   }
 
   function renderViewer() {
@@ -1091,7 +1067,7 @@
     $("viewerMeta").textContent = [image.turn === null ? null : t("turn.n", { n: image.turn }), describe(image)].filter(Boolean).join(" · ");
     const input = $("viewerCheck").querySelector("input");
     input.checked = isChecked(image);
-    input.disabled = !image.replaceable || S.saving;
+    input.disabled = !image.replaceable;
     const stage = $("viewerStage");
     const url = S.viewer.url ?? S.thumbs.get(image.id) ?? null;
     stage.classList.toggle("loading", S.viewer.loading && !!url);
@@ -1129,9 +1105,7 @@
   $("viewerStage").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeViewer(); });
   $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
-  $("undo").addEventListener("click", () => { S.pending.clear(); render(); });
   $("refresh").addEventListener("click", () => refresh(true));
-  $("confirm").addEventListener("click", confirm);
 
   // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----
   if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";

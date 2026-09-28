@@ -2,7 +2,7 @@
 // MCP Apps host side of the bridge) around the real panel.html, and answers its tool calls with the real plugin
 // server code over a synthetic thread of test images (no user material).
 // Input: none; `node spike/scripts/panel-dev.ts [--port 17895]`. Output: http://127.0.0.1:<port>/
-// (?theme=dark, ?solo=1 for the panel alone, ?demo=pending|preview for a state to screenshot, ?slow=1 for slow calls,
+// (?theme=dark, ?solo=1 for the panel alone, ?demo=preview|disabled for a state to screenshot, ?slow=1 for slow calls,
 // ?stats=none|skipped|websocket for other engine statistics than a normal rewritten request, ?setup=off for a Codex that
 // does not go through the engine yet, ?demo=disabled for right after 停用插件, ?thread=fresh for a task with no rollout;
 // with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once;
@@ -191,11 +191,10 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
     else if (m.method === "ui/notifications/initialized") { send({ method: "ui/notifications/tool-result", params: await call("cam_panel", {}) }); demo(); }
     else if (m.method === "tools/call") { const delay = params.get("slow") ? 900 : 60; const result = await call(m.params.name, m.params.arguments); setTimeout(() => send({ id: m.id, result }), delay); }
   });
-  // ?demo=pending|preview puts the panel in that state, for screenshots taken without clicking.
+  // ?demo=preview|disabled puts the panel in that state, for screenshots taken without clicking.
   function demo() {
     const d = frame.contentDocument;
     setTimeout(() => {
-      if (params.get("demo") === "pending") d.querySelector('[data-id="IMG-002"] input')?.click();
       if (params.get("demo") === "preview") d.querySelector('[data-id="IMG-004"] .thumb')?.click();
       if (params.get("demo") === "disabled") d.querySelector("#plugin .off")?.click();
     }, 700);
