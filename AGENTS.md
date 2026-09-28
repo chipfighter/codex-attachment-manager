@@ -16,6 +16,7 @@ Codex Attachment Manager（上下文素材管理器）：让用户逐轮决定�
 - 插件本体在 `plugin/`（`plugin/src` 是运行代码），测试和实验脚本在 `spike/`，一行命令用的安装、卸载脚本在 `scripts/`。改动运行代码后，要重新运行 `cam install`，Codex 缓存里的插件副本才会更新；不要让已安装的配置指向不存在的文件。
 - `scripts/*.ps1` 只用 ASCII 字符：Windows PowerShell 5.1 用 `irm … | iex` 下载时按 Latin-1 解码，中文会乱码。
 - 仓库里的文档和代码不写用户本机的具体路径；通用位置（如 `~/.codex`、`%LOCALAPPDATA%`）可以写。
+- 对外的信息以英文为主：README.md、仓库简介、CHANGELOG.md（发布时就是 Release 说明）用英文，README_CN.md 是中文版；`docs/` 下的规格、方案和开发记录，以及本文件，保持中文（用户 2026-09-28 定）。
 - 先在 Windows 上开发和测试。技术栈用 TypeScript/Node。
 - 界面开发：Claude 自己截图检查效果；做到界面的关键节点时，截图给用户看，停下来等反馈再继续（用户 2026-09-24 确认）。
 - 测试时调用模型一律用 `gpt-6-sol`，推理强度 `low`，包括脚本自测和桌面版测试，为了省 token（用户 2026-09-24 要求）。
