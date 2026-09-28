@@ -24,7 +24,7 @@ import { selectionDirOf } from "../../plugin/src/paths.ts";
 import { readRequestStats } from "../../plugin/src/request-stats.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
-import { png, runTurn, TEST_EFFORT, TEST_MODEL, text } from "./testkit.ts";
+import { archiveThreads, png, runTurn, TEST_EFFORT, TEST_MODEL, text } from "./testkit.ts";
 
 type Json = Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -118,6 +118,7 @@ async function main(): Promise<void> {
   const server = new AppServer(findBundledCodex(), ["-c", `openai_base_url="http://localhost:${port}/backend-api/codex"`, "-c", "features.respect_system_proxy=true", "-c", "notify=[]", "-c", "mcp_servers.node_repl.enabled=false", ...off], { NO_PROXY: undefined, no_proxy: undefined }, join(root, `needs-appserver-${label}.log`));
   const result: Json = { createdAt: new Date().toISOString(), label, lang, model: TEST_MODEL, effort: TEST_EFFORT, threads: [] };
   const sessionsDir = join(codexHome(), "sessions");
+  const created: string[] = [];
   try {
     // thread/resume takes a history only from a client that opts into the experimental API.
     await server.initialize({ experimentalApi: true, requestAttestation: false });
@@ -125,6 +126,7 @@ async function main(): Promise<void> {
     const run = async (n: number, questions: Array<[string, string]>) => {
       const { thread } = await server.request<{ thread: Json }>("thread/resume", { threadId: randomUUID(), history: history(words), model: TEST_MODEL, cwd: work, approvalPolicy: "never", sandbox: "read-only" });
       const threadId: string = thread.id;
+      created.push(threadId);
       await server.request("thread/name/set", { threadId, name: words.name(label, n) });
       const entry: Json = { threadId, turns: {} };
       // The index comes from the thread's record; if Codex has not written it yet, one short turn (images still in) does.
@@ -153,6 +155,7 @@ async function main(): Promise<void> {
     await run(1, [["lookNow", words.lookNow], ["whichImages", words.whichImages], ["detail", words.detail]]);
     await run(2, [["detail", words.detail]]);
   } finally {
+    result.notArchived = await archiveThreads(server, created);
     await server.stop();
     engine.kill();
   }

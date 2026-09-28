@@ -19,7 +19,7 @@ import { languageFileOf, rememberLang } from "../../plugin/src/language.ts";
 import { selectionDirOf } from "../../plugin/src/paths.ts";
 import { readRequestStats } from "../../plugin/src/request-stats.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
-import { runTurn, TEST_EFFORT, TEST_MODEL, testImages, text } from "./testkit.ts";
+import { archiveThreads, runTurn, TEST_EFFORT, TEST_MODEL, testImages, text } from "./testkit.ts";
 import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
 
 type Json = Record<string, any>;
@@ -99,6 +99,7 @@ async function main(): Promise<void> {
     await turn("newDetail", words.newDetail);
     result.lastRequest = readRequestStats(threadId, join(data, "state", "requests"))?.lastHttp?.rewrite ?? null;
   } finally {
+    if (result.threadId) result.notArchived = await archiveThreads(server, [result.threadId]);
     await server.stop();
     engine.kill();
   }
