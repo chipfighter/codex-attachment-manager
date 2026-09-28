@@ -4,6 +4,8 @@
 // Runs a test engine of this checkout on its own port and data folder, so the user's running engine is not touched.
 // v0.1-14 — --lang en runs the same turns in English, with the engine told the panel shows English, so the English
 // text for the model is checked the same way.
+// v0.1-25 — then the user checks a.png again while b.png, from the same message, is left out, and asks the detail
+// again: the model must answer from the image, not say it cannot see it (GPT-6 Luna did, user 2026-09-28).
 // Input: [--label name] [--port 17899] [--lang zh|en]. Output: local/v01/placeholder-<label>.json (synthetic test thread
 // only).
 
@@ -38,10 +40,13 @@ const SCRIPT = {
     canYouSee: "现在能看到a.png吗？",
     recall: "你刚才说 a.png 的背景是什么颜色、中间是什么形状？",
     newDetail: "a.png 里那个红色正方形的四个角，是直角还是圆角？",
+    recheck: "我已经重新勾上 a.png 了。那个红色正方形的四个角，是直角还是圆角？",
     colors: [/白/, /红/, /黑/],
     recalled: [/白/, /(方|正方)/],
     retraction: RETRACTION,
     asks: (id: string) => new RegExp(`需要\\s*[“"*]*\\s*${id}`),
+    corners: /直角|尖角/,
+    cannotSee: /看不到|无法看到|没有看到|看不见/,
   },
   en: {
     name: (label: string) => `[CAM test] v0.1 placeholder self-test ${label}`,
@@ -50,10 +55,13 @@ const SCRIPT = {
     canYouSee: "Can you see a.png now?",
     recall: "What did you say earlier about the background color of a.png and the shape in the middle?",
     newDetail: "Are the four corners of the red square in a.png sharp right angles or rounded?",
+    recheck: "I checked a.png again. Are the four corners of the red square sharp right angles or rounded?",
     colors: [/white/i, /red/i, /black/i],
     recalled: [/white/i, /square/i],
     retraction: RETRACTION_EN,
     asks: (id: string) => new RegExp(`need\\s*["“*]*\\s*${id}`, "i"),
+    corners: /sharp|right angle|square corners|90/i,
+    cannotSee: /can[’']?t see|cannot see|can not see|not visible|don[’']?t see|unable to see/i,
   },
 };
 
@@ -97,7 +105,15 @@ async function main(): Promise<void> {
     await turn("canYouSee", words.canYouSee);
     await turn("recall", words.recall);
     await turn("newDetail", words.newDetail);
-    result.lastRequest = readRequestStats(threadId, join(data, "state", "requests"))?.lastHttp?.rewrite ?? null;
+    // The engine records a request once its response has ended, which can be just after the turn completes.
+    const lastRewrite = async () => { await sleep(1500); return readRequestStats(threadId, join(data, "state", "requests"))?.lastHttp?.rewrite ?? null; };
+    result.lastRequest = await lastRewrite();
+    const b = index.images.find((image) => image.name === "b.png")!;
+    result.bId = b.id;
+    writeSelection({ threadId, unchecked: { [b.key]: { id: b.id, at: new Date().toISOString() } } }, selectionDirOf(data));
+    await sleep(2500);
+    await turn("recheck", words.recheck);
+    result.recheckRequest = await lastRewrite();
   } finally {
     if (result.threadId) result.notArchived = await archiveThreads(server, [result.threadId]);
     await server.stop();
@@ -111,6 +127,8 @@ async function main(): Promise<void> {
     recallKeepsEarlierAnswer: words.recalled.every((word) => word.test(reply("recall"))) && !words.retraction.test(reply("recall")),
     newDetailAsksForImage: words.asks(result.aId).test(reply("newDetail")),
     lastRequestReplacedA: JSON.stringify(result.lastRequest?.replaced?.map((r: Json) => `${r.id}:${r.mode}`)) === JSON.stringify([`${result.aId}:plain`]),
+    recheckRequestSentA: JSON.stringify(result.recheckRequest?.replaced?.map((r: Json) => `${r.id}:${r.mode}`)) === JSON.stringify([`${result.bId}:plain`]),
+    recheckAnswersFromImage: words.corners.test(reply("recheck")) && !words.cannotSee.test(reply("recheck")),
     noErrors: Object.values(result.turns as Record<string, Json>).every((t) => t.status === "completed" && !t.errors.length),
   };
   writeFileSync(join(root, `placeholder-${label}.json`), JSON.stringify(result, null, 2));
