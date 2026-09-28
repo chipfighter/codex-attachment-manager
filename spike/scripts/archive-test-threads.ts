@@ -3,10 +3,9 @@
 // is touched; archived tasks stay readable under Codex's archived tasks. Codex may show them until it restarts.
 // Input: `node spike/scripts/archive-test-threads.ts [--dry-run]`; CODEX_HOME. Output: the names of the tasks archived.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexHome } from "../../plugin/src/codexconfig.ts";
-import { hasRollout } from "../../plugin/src/thread-index.ts";
 import { AppServer, findBundledCodex } from "../src/appserver.ts";
 import { archiveThreads } from "../src/testkit.ts";
 
@@ -22,8 +21,17 @@ const names = new Map<string, string>();
 for (const line of readFileSync(indexFile, "utf8").split(/\r?\n/)) {
   try { const entry = JSON.parse(line); if (entry?.id) names.set(entry.id, String(entry.thread_name ?? "")); } catch { /* skip */ }
 }
-const sessionsDir = join(home, "sessions");
-const targets = [...names].filter(([id, name]) => TEST_NAME.test(name) && hasRollout(sessionsDir, id));
+// Not archived yet: the rollout is still under sessions/ (archiving moves it to archived_sessions/, which the thread
+// index also reads, so its lookups cannot tell the two apart).
+const live = new Set<string>();
+const walk = (dir: string): void => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) walk(join(dir, entry.name));
+    else { const id = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/.exec(entry.name)?.[1]; if (id) live.add(id); }
+  }
+};
+if (existsSync(join(home, "sessions"))) walk(join(home, "sessions"));
+const targets = [...names].filter(([id, name]) => TEST_NAME.test(name) && live.has(id));
 for (const [, name] of targets) console.log(name);
 console.log(`${targets.length} test task(s) ${dryRun ? "would be archived" : "to archive"}`);
 
