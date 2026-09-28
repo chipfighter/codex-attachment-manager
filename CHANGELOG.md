@@ -1,24 +1,24 @@
-# 更新记录
+# Changelog
 
-每个版本发布时，这里对应的一节就是 GitHub Release 的说明。
+When a version is released, its section here becomes the GitHub release notes.
 
-## [0.1.0] - 未发布
+## [0.1.0] - 2026-09-28
 
-第一个公开版本（MVP）：在同一个 Codex 任务里，逐轮决定哪些历史图片随下一条消息发给模型。
+The first public release (MVP): in the same Codex task, decide turn by turn which past images go to the model with your next message.
 
-### 功能
+### Features
 
-- Codex 桌面版右侧的侧边面板里多出“上下文素材”：按轮次列出任务历史里的全部图片（上传的、模型查看和生成的），带缩略图、编号、来源、尺寸和大小，点开看大图。
-- 勾选的图照常发送；取消的图从下一条消息起换成占位符，点一下就生效。有内容相同的图还在发送时，占位符指向那一张。任务不换，对话连续。
-- 省略图片时，给模型一条“上下文管理说明”：原图是用户为了节省上下文省略的，之前看着原图做出的回答仍然有效。模型不会因此收回之前的回答，也不编造没看到的细节；需要原图时回复“需要 IMG-xxx”。重新勾上的图回到原来的位置，前面标着编号，模型能认出来，直接看图回答。
-- 面板顶部预估下一条消息的请求大小，以及和全部发送相比省了多少；改写失败，或者 WebSocket 这一轮仍带着原图时会提示。
-- 图多的时候：模型要了却还没勾上的图，列在面板顶部，点编号就跳到那一张；每一轮可以整轮勾上或取消。
-- 面板、侧边面板里的入口名字和发给模型的说明，跟随 Codex 的界面语言（简体中文、英文）。
-- 安装不用开终端：在 Codex 的插件页面添加插件市场、装上插件，在面板里点“启用”。也可以用一行命令安装、卸载。
-- 卸载前在面板里点“停用”，Codex 恢复直连；卸载命令不需要插件文件，Codex 连不上时也能用它恢复。
-- 插件升级后，新引擎接替还在运行的旧引擎，正在进行的请求照常完成。
+- A *Context Assets* tab in the side panel of the Codex desktop app lists every image in the task's history by turn: the ones you uploaded and the ones the model viewed or generated, with thumbnails, IDs, source, dimensions and size. Click one to preview it.
+- Checked images are sent as usual; unchecked ones become placeholders from the next message on, and one click applies the change. When an identical image is still being sent, the placeholder points to it. The task and the conversation stay the same.
+- When images are left out, the model gets a context management note: you left the originals out to save context, and the answers it gave while looking at them still stand. The model doesn't take back earlier answers or make up details it can't see, and replies "need IMG-xxx" when it needs an original. A checked image goes back to its place in the conversation, marked with its ID, so the model recognizes it and answers from the image.
+- The panel estimates the size of the next request and how much you save compared with sending every image, and warns you when a request could not be rewritten or a WebSocket turn still carries the originals.
+- For tasks with many images: the images the model asked for but you haven't checked are listed at the top of the panel, and clicking an ID jumps to the image. Each turn can be checked or unchecked as a whole.
+- The panel, its tab name and the note for the model follow Codex's language (English or Simplified Chinese).
+- Install without a terminal: add the plugin marketplace on Codex's Plugins page, install the plugin, and click "Enable plugin" in the panel. One-line install and uninstall commands are available too.
+- Before uninstalling, click "Disable plugin" in the panel so Codex connects directly again. The uninstall command needs no plugin files and restores the connection even when Codex can't connect.
+- After an upgrade, the new engine takes over from the old one, and requests already in flight finish normally.
 
-### 平台
+### Platforms
 
-- Windows：在 Codex 桌面版 26.924 上实测。
-- macOS、Linux：CI 上验证过 Codex 能装上插件、启动插件服务和引擎，安装、卸载脚本能正常工作；还没有人在这两个平台的桌面版上实测，欢迎在 issue 里反馈。
+- Windows: tested with the Codex desktop app 26.924.
+- macOS and Linux: CI verifies that Codex installs the plugin and starts the plugin server and the engine, and that the install and uninstall scripts work. Nobody has tried the desktop app on these platforms yet; feedback in the issues is welcome.
