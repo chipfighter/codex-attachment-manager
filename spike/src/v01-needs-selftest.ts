@@ -62,6 +62,8 @@ const SCRIPT = {
     lookNow: "你能看看图片，现在设置如何的？",
     whichImages: "你需要哪些图片？",
     detail: "之前你截的视频设置页里，右上角那个图形是什么颜色？",
+    recheck: "我已经勾上了。那个图形是什么颜色？",
+    color: /橙/,
     newShots: /截图|截个图|截一张|发.{0,6}图|重新截/,
   },
   en: {
@@ -74,6 +76,8 @@ const SCRIPT = {
     lookNow: "Can you look at the images? How are the settings now?",
     whichImages: "Which images do you need?",
     detail: "In the video settings page you took a screenshot of earlier, what color is the shape in the top-right corner?",
+    recheck: "Checked it. What color is the shape?",
+    color: /orange/i,
     newShots: /screenshot|send (me )?(a |an |the )?(new |fresh )?(image|picture)/i,
   },
 };
@@ -123,7 +127,7 @@ async function main(): Promise<void> {
     // thread/resume takes a history only from a client that opts into the experimental API.
     await server.initialize({ experimentalApi: true, requestAttestation: false });
     // Starts a thread holding the history, with every screenshot unchecked, and asks the questions in turn.
-    const run = async (n: number, questions: Array<[string, string]>) => {
+    const run = async (n: number, questions: Array<[string, string]>, recheck = false) => {
       const { thread } = await server.request<{ thread: Json }>("thread/resume", { threadId: randomUUID(), history: history(words), model: TEST_MODEL, cwd: work, approvalPolicy: "never", sandbox: "read-only" });
       const threadId: string = thread.id;
       created.push(threadId);
@@ -148,12 +152,23 @@ async function main(): Promise<void> {
       await sleep(2500);
       entry.images = index.images.map((image) => `${image.id}:${image.kind}:${image.name ?? "-"}`);
       for (const [name, prompt] of questions) entry.turns[name] = await runTurn(server, threadId, [text(prompt)]);
+      // v0.1-25 (user 2026-09-28): the user checks only the images the model asked for, the others stay unchecked, and
+      // asks again; the model must now answer from the image (GPT-6 Luna kept saying it could not see it).
+      const asked = askedIn(String(entry.turns[questions[questions.length - 1][0]]?.reply ?? ""));
+      if (recheck && asked.length) {
+        writeSelection({ threadId, unchecked: Object.fromEntries(Object.entries(unchecked).filter(([, value]) => !asked.includes(value.id))) }, selectionDirOf(data));
+        await sleep(2500);
+        entry.rechecked = asked;
+        entry.turns.recheck = await runTurn(server, threadId, [text(words.recheck)]);
+      }
+      // The engine records a request once its response has ended, which can be just after the turn completes.
+      await sleep(1500);
       entry.lastRequest = readRequestStats(threadId, join(data, "state", "requests"))?.lastHttp?.rewrite ?? null;
       result.threads.push(entry);
       return entry;
     };
     await run(1, [["lookNow", words.lookNow], ["whichImages", words.whichImages], ["detail", words.detail]]);
-    await run(2, [["detail", words.detail]]);
+    await run(2, [["detail", words.detail]], true);
   } finally {
     result.notArchived = await archiveThreads(server, created);
     await server.stop();
@@ -170,6 +185,7 @@ async function main(): Promise<void> {
       panelSees: askedIn(String(t.reply)), ids: [...new Set(String(t.reply).match(/IMG-\d{3}/g) ?? [])], asksForNewShots: words.newShots.test(t.reply),
       // v0.1-24: whether the reply uses the words the note asks for ("需要 IMG-xxx" / "need IMG-xxx").
       writesNeed: /需要\s*[“"*]*\s*IMG-\d{3}|\bneed\s*[“"*]*\s*IMG-\d{3}/i.test(String(t.reply)),
+      ...(name === "recheck" ? { rechecked: entry.rechecked, answersColor: words.color.test(String(t.reply)) } : {}),
       tools: t.tools, status: t.status, errors: t.errors, reply: t.reply,
     }])),
   }));
