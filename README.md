@@ -20,7 +20,11 @@
   <img src="docs/images/demo.gif" alt="Every image in the task is unchecked. Asked about v1's chat button, the model replies need IMG-002; the panel points to IMG-002, the user checks it, and the model answers from the image." width="100%">
 </p>
 
-In a long Codex task, every image you or the model added is sent again with every request, so requests keep growing. Uncheck the images you no longer need: they are left out from the next message on, and the task and the conversation stay the same.
+## Why I built this
+
+I was iterating on image generation with GPT in Codex. After a dozen or so images, the task started failing: the connection kept dropping, and the retries every few minutes never went through. Digging into it, I found that Codex sends every image in the task's history again with every request, and each request had grown to about 44 MB. The only way out was a new task, which meant losing the conversation.
+
+So I wanted to keep the long conversation going and decide, turn by turn, which images the model still gets. Uncheck the ones you no longer need: from the next message on they become short placeholders, and the task and the conversation stay the same.
 
 ## Features
 
