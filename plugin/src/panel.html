@@ -22,7 +22,8 @@
   a bar under the request size; clicking one scrolls the list to its row and flashes the row twice.
   v0.1-18: a checkbox at the end of a turn's line (when it has two or more images that can change) checks or
   unchecks all of them at once; it shows a dash while only some are checked.
-  v0.1-22 (user 2026-09-28): every check or uncheck, one image or a whole turn, is saved at once; no 确定, no 撤销.
+  v0.1-22 (user 2026-09-28): every check or uncheck, one image or a whole turn, is saved at once; no 确定, no 撤销,
+  and the footer keeps its one line (no "saved" message).
   v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take; by MCP Apps the page reports the
   height it wants (size-changed): it asks for all of it, and fits a smaller frame if that is what it gets.
   v0.1-23: the panel never scrolls as a whole; only the list does (a turn's hidden checkbox once let it).
@@ -192,7 +193,6 @@
 
   footer { flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 14px 12px 18px; border-top: 1px solid var(--border); background: var(--bg); }
   .status { flex: 1; min-width: 0; color: var(--text-3); font-size: 12.5px; }
-  .status.ok { color: var(--ok); }
   [hidden] { display: none !important; }
 
   .viewer { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; background: rgb(19 19 19); color: rgb(245 245 245); }
@@ -309,8 +309,6 @@
       "reason.other": "改写时出错",
       "chooser.title": "刚刚开始了好几个任务，这个面板要显示哪一个？",
       "chooser.untitled": "新任务",
-      "footer.saving": "正在保存…",
-      "footer.saved": "已保存，从下一条消息开始生效",
       "footer.hint": "勾选的图片会随下一条消息发给模型",
       "viewer.label": "图片预览",
       "viewer.close": "关闭预览",
@@ -395,8 +393,6 @@
       "reason.other": "an error occurred while rewriting",
       "chooser.title": "Several tasks just started. Which one should this panel show?",
       "chooser.untitled": "New task",
-      "footer.saving": "Saving…",
-      "footer.saved": "Saved; applies from the next message",
       "footer.hint": "Checked images go to the model with the next message",
       "viewer.label": "Image preview",
       "viewer.close": "Close preview",
@@ -541,7 +537,6 @@
   const S = {
     data: null, threadId: null,
     error: null,                   // { key, message }: said in the current language when drawn
-    flash: null,                   // a text key
     unsaved: new Map(),            // id -> checked, clicked and shown already, saved by the next call (v0.1-22)
     thumbs: new Map(),             // id -> data URL or null
     viewer: null,                  // { id, url, loading, failed }
@@ -610,13 +605,12 @@
 
   // ---- checking and unchecking: saved at once (v0.1-22, user 2026-09-28: no 确定, no 撤销) ----
   // A click shows at once; clicks made while a save is under way go out together right after it.
-  let lastSaveStarted = 0, flashTimer = 0;
+  let lastSaveStarted = 0;
   const setChecked = (id, checked) => change([id], checked);
   function change(ids, checked) {
     const targets = ids.filter((id) => byId(id)?.replaceable);
     if (!targets.length) return;
     for (const id of targets) S.unsaved.set(id, checked);
-    S.flash = null;
     render();
     flush();
   }
@@ -625,7 +619,7 @@
     let failed = false;
     while (S.unsaved.size && !failed) {
       const batch = [...S.unsaved];
-      S.saving = true; lastSaveStarted = Date.now(); renderFooter();
+      S.saving = true; lastSaveStarted = Date.now();
       try {
         const result = await callTool("cam_set_selection", {
           check: batch.filter(([, checked]) => checked).map(([id]) => id),
@@ -633,9 +627,6 @@
         });
         // An image clicked again meanwhile keeps its newer choice, which the next round saves.
         for (const [id, checked] of batch) if (S.unsaved.get(id) === checked) S.unsaved.delete(id);
-        S.flash = "footer.saved";
-        clearTimeout(flashTimer);
-        flashTimer = setTimeout(() => { S.flash = null; renderFooter(); }, 4000);
         ingest(result.structuredContent);
       } catch (error) {
         // The list goes back to what is saved, and the error says why.
@@ -1052,12 +1043,9 @@
     for (const image of list) queueThumb(image.id);
   }
 
+  // Always the same line: a check needs no word that it was saved (user 2026-09-28).
   function renderFooter() {
-    const status = $("status");
-    status.className = "status";
-    if (S.saving) status.textContent = t("footer.saving");
-    else if (S.flash) { status.textContent = t(S.flash); status.classList.add("ok"); }
-    else status.textContent = images().length ? t("footer.hint") : "";
+    $("status").textContent = images().length ? t("footer.hint") : "";
   }
 
   function renderViewer() {
