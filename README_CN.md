@@ -1,4 +1,6 @@
-# Codex 上下文素材管理器（暂名）
+# Codex 上下文素材管理器（Codex Attachment Manager）
+
+[English](README.md) · **简体中文**
 
 一个 Codex 桌面版插件：在同一个任务里，逐轮决定哪些历史图片随下一条消息发给模型。
 
@@ -22,7 +24,7 @@
 
 ## 环境要求
 
-- Codex 桌面版。Windows 上在 26.917 上实测过。
+- Codex 桌面版。Windows 上在 26.924 上实测过。
 - macOS、Linux：CI 上验证过 Codex 能装上插件、启动插件服务和引擎，安装和卸载命令也能正常工作；但还没有人在这两个平台的桌面版上实测过。遇到问题请[提 issue](https://github.com/chipfighter/codex-attachment-manager/issues)。
 - 不需要另外安装 Node：插件使用 Codex 自带的 Node 24；找不到时，才用系统里 24 以上的 `node`。
 
