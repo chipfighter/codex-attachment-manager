@@ -38,6 +38,20 @@ test("an asked-for id may be in bold, or asked for as checking it again; uncheck
   assert.deepEqual(asked("IMG-003 was restored earlier, and I will check IMG-004 carefully; I can't see IMG-002 now."), []);
 });
 
+// v0.1-24 — GPT-6 Luna's reply in the user's recording of 2026-09-28 (all images unchecked): "reattach", two ids joined
+// by "or", each followed by a note in brackets. Nothing showed in the "model needs" bar.
+test("an asked-for id may be asked for as re-attaching or sending it, several joined by or, each with a note", () => {
+  const asked = (reply: string) => requestedIds(records(turn("t1") + assistant(reply, "t1")));
+  assert.deepEqual(asked("I can’t see the earlier images now; they were left out of the conversation. I didn’t mention v1’s chat button color in my earlier notes, so I can’t identify it from the context I have. Please reattach IMG-002 (v1 desktop) or IMG-003 (v1 mobile)."), ["IMG-002", "IMG-003"]);
+  assert.deepEqual(asked("Could you re-attach IMG-004 or send me IMG-005 again?"), ["IMG-004", "IMG-005"]);
+  assert.deepEqual(asked("Please share IMG-006, IMG-007 or IMG-008 so I can compare."), ["IMG-006", "IMG-007", "IMG-008"]);
+  assert.deepEqual(asked("请重新附上 IMG-002（v1 桌面版）或 IMG-003。"), ["IMG-002", "IMG-003"]);
+  assert.deepEqual(asked("请重新发送 IMG-009 或者 IMG-010。"), ["IMG-009", "IMG-010"]);
+  // Not asking: an image described as attached or sent before.
+  assert.deepEqual(asked("The attached IMG-001 shows the hero; you sent IMG-002 earlier, and IMG-003 was reattached before."), []);
+  assert.deepEqual(asked("你已经上传 IMG-004，之前也发送过 IMG-005 的截图。"), []);
+});
+
 test("panel state lists every image with checked, same-content and requested flags", () => {
   const options = sampleSessions();
   const state = loadPanelState(THREAD, options);

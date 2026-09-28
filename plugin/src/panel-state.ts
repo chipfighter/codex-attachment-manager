@@ -74,12 +74,17 @@ export type PanelOptions = { sessionsDir: string; dataRoot?: string };
 // the user to check them again in the note's own words ("请重新勾选 IMG-003 和 IMG-004", "please check IMG-004 back in",
 // "please restore IMG-004"); "取消勾选" and a state ("已勾选", "没勾选", "was restored") are not asking.
 const MARKS = "[“”\"'‘’「」*_`]*";
-const item = (separators: string) => `(?:\\s*${MARKS}\\s*IMG-\\d{3,}\\s*${MARKS}\\s*(?:${separators})?)`;
-const ZH_LIST = `(${item("[、，,/]|以及|和|与|及")}+)`;
-const EN_LIST = `(${item(",|and")}+)`;
+// v0.1-24: an id may carry a short note in brackets ("IMG-002 (v1 desktop)"), and several may be joined by "or".
+const NOTE = "(?:\\s*[（(][^()（）]{0,40}[)）])?";
+const item = (separators: string) => `(?:\\s*${MARKS}\\s*IMG-\\d{3,}\\s*${MARKS}${NOTE}\\s*(?:${separators})?)`;
+const ZH_LIST = `(${item("[、，,/]|以及|和|与|及|或者|或")}+)`;
+const EN_LIST = `(${item(",|and|or")}+)`;
+// v0.1-24: models also ask the user to attach, send or share an image again (GPT-6 Luna: "Please reattach IMG-002").
+const ZH_ASK = "(?:重新)?(?:勾选|附上|附加|上传|发送|提供)";
+const EN_ASK = "needs?|restore|re-?enable|re-?check|re-?select|re-?attach|attach|re-?add|add back|re-?send|send|re-?share|share|re-?upload|upload|provide|re-?include|include";
 const ASKED = [
-  new RegExp(`(?:需要|(?<!取消|已|已经|没|没有|未)(?:重新)?勾选)${ZH_LIST}`, "g"),
-  new RegExp(`\\b(?:needs?|restore|re-?enable|re-?check|re-?select)${EN_LIST}`, "gi"),
+  new RegExp(`(?:需要|(?<!取消|已|已经|没|没有|未)${ZH_ASK})${ZH_LIST}`, "g"),
+  new RegExp(`\\b(?:${EN_ASK})(?:\\s+(?:me|us))?${EN_LIST}`, "gi"),
   new RegExp(`\\bcheck${EN_LIST}\\s*(?:back|again)\\b`, "gi"),
 ];
 
