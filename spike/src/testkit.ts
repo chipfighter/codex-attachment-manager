@@ -49,15 +49,17 @@ export const testImages = {
   },
 };
 
-// Tests use gpt-6-sol at low effort to save the user's tokens (AGENTS.md).
-export const TEST_MODEL = "gpt-6-sol";
+// Tests use gpt-6-sol at low effort to save the user's tokens (AGENTS.md). v0.1-24: CAM_TEST_MODEL and CAM_TEST_EFFORT
+// run the same test on another model, to check that the text for the model works for every GPT-6 model.
+export const TEST_MODEL = process.env.CAM_TEST_MODEL?.trim() || "gpt-6-sol";
+export const TEST_EFFORT = process.env.CAM_TEST_EFFORT?.trim() || "low";
 
 export const text = (value: string) => ({ type: "text", text: value, text_elements: [] });
 
 export async function runTurn(server: AppServer, threadId: string, input: Json[], timeoutMs = 20 * 60_000): Promise<Json> {
   const started = Date.now();
   const before = server.notifications.length;
-  const { turn } = await server.request<{ turn: Json }>("turn/start", { threadId, input, effort: "low" }, 120_000);
+  const { turn } = await server.request<{ turn: Json }>("turn/start", { threadId, input, effort: TEST_EFFORT }, 120_000);
   const done = await server.waitFor((n) => n.method === "turn/completed" && n.params.turn?.id === turn.id, timeoutMs);
   const mine = server.notifications.slice(before).filter((n) => n.params?.turnId === turn.id || n.params?.turn?.id === turn.id);
   const items = mine.filter((n) => n.method === "item/completed").map((n) => n.params.item);

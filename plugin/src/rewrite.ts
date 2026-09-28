@@ -4,6 +4,7 @@
 // keeps trusting what it said about it (user report 2026-09-25).
 // v0.1-14 — in the user's language (Codex's interface language, language.ts): the Chinese wording is the one tested on
 // 2026-09-25; the English one says the same and is checked by the same self-test (v01-placeholder-selftest.ts --lang en).
+// v0.1-24 — how to ask for an image back is spelled out, for every GPT-6 model (self-tests with CAM_TEST_MODEL).
 // Input: request items, a lookup into the thread index, the unchecked keys. Output: new items plus a metadata report.
 
 import { findImages, type ImageKind, type ImageRef } from "./images.ts";
@@ -42,7 +43,7 @@ const WORDS: Record<Lang, Words> = {
     note: [
       "上下文管理说明（来自用户安装的上下文素材管理工具）：为了节省上下文，用户取消勾选了这个任务里的部分图片。后面的对话里，这些图片原来的位置被换成了“[图片 IMG-xxx 已省略…]”这样的占位文字。",
       "这些图片在它们出现的那一轮真实存在，你当时收到并看过；你之前对它们的描述，以及据此做出的判断，都是看着原图做出的，仍然有效。不要因为现在看不到，就认为之前的回答是猜测或错误，也不要收回或道歉。",
-      "被问到现在能不能看到时，如实说明现在看不到（被用户省略了），并说明之前的描述仍然有效。现在看不到画面，就不要补充之前没说过的细节；需要重新看某张图时，在回复里写出“需要 IMG-xxx”，用户可以重新勾选；不要自己用工具去读取这些图片。",
+      "被问到现在能不能看到时，如实说明现在看不到（被用户省略了），并说明之前的描述仍然有效。现在看不到画面，就不要补充之前没说过的细节。需要重新看某张图时，在回复里原样写出“需要 IMG-xxx”（几张就写“需要 IMG-002、IMG-003”）：工具靠这几个字认出你要的图，用户在工具里勾选后，下一条消息就会带上原图，所以不要让用户重新上传或附上图片。不要自己用工具去读取这些图片。",
     ].join("\n"),
   },
   en: {
@@ -60,12 +61,13 @@ const WORDS: Record<Lang, Words> = {
     note: [
       "Context management note (from the context asset manager the user installed): to save context, the user unchecked some images in this task. Further on in the conversation, where those images were, there is now placeholder text such as \"[Image IMG-xxx omitted…]\".",
       "These images really existed in the turn where they appeared, and you received and looked at them then; what you said about them before, and the judgments you based on it, were made looking at the original images and remain valid. Do not treat your earlier answers as guesses or mistakes because you cannot see the images now, and do not take them back or apologize.",
-      "If asked whether you can see them now, say truthfully that you cannot see them now (the user left them out), and that your earlier descriptions remain valid. Since you cannot see them now, do not add details you did not mention before; if you need to look at an image again, write \"need IMG-xxx\" in your reply, and the user can check it again; do not read these images yourself with tools.",
+      "If asked whether you can see them now, say truthfully that you cannot see them now (the user left them out), and that your earlier descriptions remain valid. Since you cannot see them now, do not add details you did not mention before. If you need to look at an image again, write exactly \"need IMG-xxx\" in your reply (for several: \"need IMG-002, IMG-003\"): the tool finds the images you want by these words, and once the user checks them, the next message brings back the originals, so do not ask the user to upload or attach them again. Do not read these images yourself with tools.",
     ].join("\n"),
   },
 };
 
-// Kept for the tests and the 2026-09-25 record: the Chinese note as tested then.
+// The Chinese note, tested on 2026-09-25; v0.1-24 (2026-09-28) spells out how to ask for an image back ("需要 IMG-xxx",
+// several at once, no re-uploading), after GPT-6 Luna asked the user to "reattach" images instead.
 export const OMISSION_NOTE = WORDS.zh.note;
 export const omissionNote = (lang: Lang) => WORDS[lang].note;
 
