@@ -68,7 +68,7 @@ function readSystemProxy(): string | null {
 // (the engine tunnels with CONNECT); PAC files and SOCKS are not read. Linux has no system setting beyond the
 // environment.
 export function macProxy(scutil: string): string | null {
-  const field = (key: string) => new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)\\s*$`, "m").exec(scutil)?.[1] ?? null;
+  const field = (key: string) => scutil.match(new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)\\s*$`, "m"))?.[1] ?? null;
   for (const scheme of ["HTTPS", "HTTP"]) {
     const host = field(`${scheme}Proxy`);
     if (field(`${scheme}Enable`) === "1" && host) return `${host}:${field(`${scheme}Port`) ?? "80"}`;

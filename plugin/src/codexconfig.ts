@@ -30,7 +30,7 @@ const isTable = (line: string) => /^\s*\[/.test(line);
 function topLevelValue(lines: string[], key: string): string | null {
   for (const line of lines) {
     if (isTable(line)) return null;
-    const match = new RegExp(`^\\s*${key.replaceAll(".", "\\.")}\\s*=\\s*(.+?)\\s*(#.*)?$`).exec(line);
+    const match = line.match(new RegExp(`^\\s*${key.replaceAll(".", "\\.")}\\s*=\\s*(.+?)\\s*(#.*)?$`));
     if (match) return match[1];
   }
   return null;
@@ -166,7 +166,7 @@ export function persistedEnv(name: string): string | null {
   for (const key of ["HKCU\\Environment", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"]) {
     try {
       const out = execFileSync("reg", ["query", key, "/v", name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      const match = new RegExp(`${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)`, "i").exec(out);
+      const match = out.match(new RegExp(`${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)`, "i"));
       if (match) return match[1].trim();
     } catch { /* not set at this level */ }
   }
