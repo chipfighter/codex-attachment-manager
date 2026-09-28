@@ -6,3 +6,9 @@ local/
 
 # Claude Code 的本机配置和工作区，里面有本机绝对路径
 .claude/
+
+# 演示录屏的原视频只留在本机，不上传 GitHub（用户 2026-09-28 要求）；README 用转好的动图
+*.mp4
+*.mov
+*.mkv
+*.webm
