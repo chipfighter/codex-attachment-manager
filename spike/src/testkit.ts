@@ -56,6 +56,16 @@ export const TEST_EFFORT = process.env.CAM_TEST_EFFORT?.trim() || "low";
 
 export const text = (value: string) => ({ type: "text", text: value, text_elements: [] });
 
+// The self-tests' tasks show up in the user's Codex; once a test is done they are archived (user 2026-09-28), and stay
+// readable under Codex's archived tasks. Returns the ids that could not be archived.
+export async function archiveThreads(server: AppServer, threadIds: string[]): Promise<string[]> {
+  const failed: string[] = [];
+  for (const threadId of threadIds) {
+    try { await server.request("thread/archive", { threadId }, 30_000); } catch { failed.push(threadId); }
+  }
+  return failed;
+}
+
 export async function runTurn(server: AppServer, threadId: string, input: Json[], timeoutMs = 20 * 60_000): Promise<Json> {
   const started = Date.now();
   const before = server.notifications.length;
