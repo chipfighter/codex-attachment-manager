@@ -24,7 +24,7 @@ import { selectionDirOf } from "../../plugin/src/paths.ts";
 import { readRequestStats } from "../../plugin/src/request-stats.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
-import { png, runTurn, TEST_MODEL, text } from "./testkit.ts";
+import { png, runTurn, TEST_EFFORT, TEST_MODEL, text } from "./testkit.ts";
 
 type Json = Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
   const off = ["computer-use@openai-bundled", "unified-computer-use@openai-bundled", "chrome@openai-bundled", "browser@openai-bundled", "codex-app-tools@openai-bundled"]
     .flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`]);
   const server = new AppServer(findBundledCodex(), ["-c", `openai_base_url="http://localhost:${port}/backend-api/codex"`, "-c", "features.respect_system_proxy=true", "-c", "notify=[]", "-c", "mcp_servers.node_repl.enabled=false", ...off], { NO_PROXY: undefined, no_proxy: undefined }, join(root, `needs-appserver-${label}.log`));
-  const result: Json = { createdAt: new Date().toISOString(), label, lang, threads: [] };
+  const result: Json = { createdAt: new Date().toISOString(), label, lang, model: TEST_MODEL, effort: TEST_EFFORT, threads: [] };
   const sessionsDir = join(codexHome(), "sessions");
   try {
     // thread/resume takes a history only from a client that opts into the experimental API.
@@ -165,6 +165,8 @@ async function main(): Promise<void> {
     turns: Object.fromEntries(Object.entries(entry.turns as Record<string, Json>).map(([name, t]) => [name, {
       // What the panel picks up from this reply (its bar and tags), next to every id the reply mentions.
       panelSees: askedIn(String(t.reply)), ids: [...new Set(String(t.reply).match(/IMG-\d{3}/g) ?? [])], asksForNewShots: words.newShots.test(t.reply),
+      // v0.1-24: whether the reply uses the words the note asks for ("需要 IMG-xxx" / "need IMG-xxx").
+      writesNeed: /需要\s*[“"*]*\s*IMG-\d{3}|\bneed\s*[“"*]*\s*IMG-\d{3}/i.test(String(t.reply)),
       tools: t.tools, status: t.status, errors: t.errors, reply: t.reply,
     }])),
   }));

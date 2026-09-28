@@ -19,7 +19,7 @@ import { languageFileOf, rememberLang } from "../../plugin/src/language.ts";
 import { selectionDirOf } from "../../plugin/src/paths.ts";
 import { readRequestStats } from "../../plugin/src/request-stats.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
-import { runTurn, TEST_MODEL, testImages, text } from "./testkit.ts";
+import { runTurn, TEST_EFFORT, TEST_MODEL, testImages, text } from "./testkit.ts";
 import { loadThreadIndex } from "../../plugin/src/thread-index.ts";
 
 type Json = Record<string, any>;
@@ -41,7 +41,7 @@ const SCRIPT = {
     colors: [/白/, /红/, /黑/],
     recalled: [/白/, /(方|正方)/],
     retraction: RETRACTION,
-    asks: (id: string) => new RegExp(`需要\\s*${id}`),
+    asks: (id: string) => new RegExp(`需要\\s*[“"*]*\\s*${id}`),
   },
   en: {
     name: (label: string) => `[CAM test] v0.1 placeholder self-test ${label}`,
@@ -53,7 +53,7 @@ const SCRIPT = {
     colors: [/white/i, /red/i, /black/i],
     recalled: [/white/i, /square/i],
     retraction: RETRACTION_EN,
-    asks: (id: string) => new RegExp(`need\\s*["“]?${id}`, "i"),
+    asks: (id: string) => new RegExp(`need\\s*["“*]*\\s*${id}`, "i"),
   },
 };
 
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < 50 && !(await engineHealth(port)); i++) await sleep(200);
   const startedAt = new Date().toISOString();
   const server = new AppServer(findBundledCodex(), ["-c", `openai_base_url="http://localhost:${port}/backend-api/codex"`, "-c", "features.respect_system_proxy=true"], { NO_PROXY: undefined, no_proxy: undefined }, join(root, `appserver-${label}.log`));
-  const result: Json = { createdAt: startedAt, label, lang, turns: {} };
+  const result: Json = { createdAt: startedAt, label, lang, model: TEST_MODEL, effort: TEST_EFFORT, turns: {} };
   try {
     await server.initialize();
     const { thread } = await server.request<{ thread: Json }>("thread/start", { model: TEST_MODEL, cwd: work, approvalPolicy: "never", sandbox: "read-only", ephemeral: false });
@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     noErrors: Object.values(result.turns as Record<string, Json>).every((t) => t.status === "completed" && !t.errors.length),
   };
   writeFileSync(join(root, `placeholder-${label}.json`), JSON.stringify(result, null, 2));
-  console.log(JSON.stringify({ threadId: result.threadId, checks: result.checks, replies: Object.fromEntries(Object.entries(result.turns as Record<string, Json>).map(([name, t]) => [name, t.reply])) }, null, 2));
+  console.log(JSON.stringify({ threadId: result.threadId, model: `${TEST_MODEL} ${TEST_EFFORT}`, checks: result.checks, replies: Object.fromEntries(Object.entries(result.turns as Record<string, Json>).map(([name, t]) => [name, t.reply])) }, null, 2));
 }
 
 await main();
