@@ -30,4 +30,5 @@ Codex Attachment Manager（上下文素材管理器）：让用户逐轮决定�
 - 提交信息用约定式格式：`类型(范围): 描述`，例如 `feat(indexer): 解析内联图片`。
 - 合并前先验证，确认相关测试和检查都通过。然后用 `git merge --no-ff` 合并到 `main`，不开 PR，合并后删除短分支。
 - 不对 `main` 强推，不改写 `main` 上已经推送的历史。
+- GitHub 上 `main` 有分支保护（用户 2026-09-28 要求）：禁止强推和删除；其他人改 `main` 要提 PR，三个平台的 CI（`test (windows-latest)`、`test (macos-latest)`、`test (ubuntu-latest)`）通过，并由仓库所有者批准。仓库所有者是管理员，不受这些限制，照常在本地 `--no-ff` 合并后推送。
 - 远程只用 SSH（`git@github.com:…`），不用 HTTPS。
