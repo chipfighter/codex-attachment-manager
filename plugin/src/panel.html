@@ -23,8 +23,9 @@
   v0.1-18: a checkbox at the end of a turn's line (when it has two or more images that can change) checks or
   unchecks all of them at once; it shows a dash while only some are checked.
   v0.1-22 (user 2026-09-28): every check or uncheck, one image or a whole turn, is saved at once; no 确定, no 撤销.
-  v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take, and shows as much as the page asks
-  for (MCP Apps size-changed); the page asks for all of it, and fits a smaller frame if that is what it gets.
+  v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take; by MCP Apps the page reports the
+  height it wants (size-changed): it asks for all of it, and fits a smaller frame if that is what it gets.
+  v0.1-23: the panel never scrolls as a whole; only the list does (a turn's hidden checkbox once let it).
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -108,7 +109,9 @@
   .needs button:active { transform: scale(.96); }
 
   main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 18px; border-top: 1px solid var(--border); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-  .turn { display: flex; align-items: center; gap: 10px; margin: 18px 8px 6px; color: var(--text-3); font-size: 12px; font-weight: 500; }
+  /* position: the hidden checkbox inside stays in this line. Without it, it hung off the page far down the list, the
+     page could scroll, and checking a turn low in the list scrolled the whole panel away (user 2026-09-28). */
+  .turn { position: relative; display: flex; align-items: center; gap: 10px; margin: 18px 8px 6px; color: var(--text-3); font-size: 12px; font-weight: 500; }
   .turn::after { content: ""; flex: 1; height: 1px; background: var(--border); }
   .turn:first-child { margin-top: 14px; }
   /* v0.1-18: the turn's checkbox sits after the line, in the column of the rows' checkboxes, drawn quieter than them. */
@@ -506,10 +509,10 @@
   }
 
   // ---- v0.1-21: the frame's height ----
-  // Codex 26.924 gives the page no fixed height, only the most it may take (containerDimensions), and shows as much of
-  // the page as it asks for (ui/notifications/size-changed). A page as tall as its frame asked for nothing, and the
-  // panel was cut to 200 px (user 2026-09-27). So the page asks for all it may take; if the frame it then gets is
-  // smaller (a host may cap it), it fits that frame, so the footer stays in view. A fixed height is simply filled.
+  // Codex 26.924 gives the page no fixed height, only the most it may take (containerDimensions); by MCP Apps, a page
+  // then reports the height it wants (ui/notifications/size-changed). The panel asks for all it may take; if the frame
+  // it then gets is smaller (a host may cap it), it fits that frame, so the footer stays in view. A fixed height is
+  // simply filled. (The strip users saw in 26.924 was the page scrolled away, not a short frame: see .turn above.)
   const frame = { asked: 0, timer: 0 };
   function fitFrame(dimensions) {
     const height = Math.floor(Number(dimensions.height) || Number(dimensions.maxHeight) || 0);
