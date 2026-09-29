@@ -21,7 +21,7 @@
 | 引擎 | `proxy.ts`、`engine.ts` | 本机代理：改写请求、记录每个任务最近一次请求的统计；全机只有一个 |
 | 插件服务 | `plugin-server.ts` | Codex 为每个会话启动的 MCP 服务：拉起并看守引擎，给面板提供数据 |
 | 面板 | `panel.html`、`panel-state.ts` | 侧边面板里的 MCP 应用，以及它要显示的数据 |
-| 任务索引 | `thread-index.ts`、`images.ts`、`thumbnail.ts`、`png.ts`、`thread-names.ts` | 从 Codex 的任务记录里只读地找出图片、编号、生成缩略图、读任务名 |
+| 任务索引 | `thread-index.ts`、`images.ts`、`thumbnail.ts`、`png.ts`、`thread-names.ts` | 从 Codex 的任务记录里只读地找出图片和它的来源、编号、生成缩略图、读任务名 |
 | 改写 | `rewrite.ts`、`selection.ts`、`request-stats.ts` | 占位符、说明和标签；勾选状态；请求统计 |
 | 接入和安装 | `codexconfig.ts`、`setup.ts`、`install.ts`、`codexcli.ts`、`cam.ts` | 管理 Codex 配置里带标记的块；用 Codex 的命令行装卸插件；`cam` 命令行 |
 | 其他 | `language.ts`、`messages.ts`、`paths.ts`、`migrate-data.ts`、`binding.ts`、`entry.ts` | 语言、文字表、数据目录、旧数据迁移、新任务绑定 |
@@ -47,9 +47,16 @@
   - 用户上传：用户消息里依次是 `<image name=[Image #N] path="…">`、图片、`</image>` 三段。`[Image #N]` 在每条消息里都从 1 开始。
   - 工具查看和生成：Codex 的工具都经 `exec`（代码模式）调用，图片在 `custom_tool_call_output` 里。查看的文件路径写在调用代码里；生成的图后面跟着一段说明保存路径的文字。
   - 托管生图的结果（`image_generation_call.result`）是必填字段，换不成文字，所以不能取消。
+  - 桌面版的评论截图：用户在 Codex 里给 PDF 或网页加评论时，用户消息里先是评论的文字（PDF 的评论带 `PDF path: …`、`PDF page: 3/12` 两行），然后每条评论一段说明、紧跟一张不带标签的图。说明的原文见第 11 节。
 - **编号**：从任务的本地记录（rollout，只读）里按顺序找出所有图片出现记录，依次编号 IMG-001、IMG-002……记录只会追加，已有的编号不变。编号只由记录决定，插件服务和引擎各自计算，结果一致，不用共享状态。
 - **请求和记录对得上**：请求里的消息和工具输出带着和本地记录相同的 `id`，所以按“条目 `id` + 图片在条目里的序号”就能对上，不受压缩和位置变化影响。没有 `id` 时用 `call_id`，再没有就用类型、轮次和内容哈希。
 - **内容相同**：先比较 base64 内容的哈希，再比较 PNG 解码后的像素哈希。像素指纹存在数据目录的 `cache/pixels/`，引擎和各个插件服务共用，不存图片内容。
+- **来源**（v0.2，`images.ts`，面板按它筛选）：
+  - 一般就是图的类型：用户上传、查看的图片、工具返回、生成的图片。
+  - 用户消息里的图，前一段文字是 Codex 的评论说明（第 11 节），就算 PDF 页面或网页截图。说明必须是自己单独一段、紧挨在图前面，别的文字里出现同样的话不算。
+  - PDF 页面从说明里取页码。这条消息里的 `PDF path:` 只有一个路径时，取它的文件名，面板用它当名称。
+  - 认不出的一律算用户上传，不会标错。
+  - 来源、页码、文件名是单独的字段，改写请求不用它们，图片的名称和类型也不变，所以发给模型的文字和 v0.1 一样。
 - **记录的存放**：
   - `sessions/YYYY/MM/DD`，按创建那天的本地日期分目录；长任务分成好几段。
   - 分叉任务的前半段历史在父任务的记录里，沿记录开头的 `history_base` 跨任务读取。
@@ -66,6 +73,7 @@
   - 有普通占位符时，在第一张被省略的图所在那一轮的用户消息之前，插入一条开发者消息（“上下文管理说明”）。放在开发者消息里，是因为占位符属于用户内容，模型不把它当成证据。
   - 只要有图被换掉，每张仍在发送、有编号的图前面加一行“已提供”标签（v0.1-25）：重新勾选的图回到原来的位置、夹在占位符中间，没有编号时模型对不上。
   - 文字跟随界面语言（第 7 节）。勾选状态不变时，改写结果逐字节相同，不影响缓存。
+  - PDF 页面和网页截图按用户上传处理：占位符里的来源写“用户上传”，Codex 写在图前面的说明不动，模型仍然知道是哪一页。
 - **切到 HTTP**：WebSocket 连接上 Codex 只发新增的条目，靠 `previous_response_id` 接上服务端保存的历史，已经发过的图去不掉。所以：
   - 任务一有取消项，引擎就对它的 WebSocket 握手回 426，Codex 在这个会话里改走 HTTP，每次都发完整历史；
   - 它已有的 WebSocket 连接，空闲 1.5 秒后由引擎关掉；
@@ -94,13 +102,19 @@
 - **刷新**：每 3 秒读一次，没有变化就不重画；页面报告自己不可见时降到 15 秒；用户移进、点击、滚动时立刻读一次。
 - **发送预览**：以引擎记录的上一次完整请求为基准，按当前勾选估算下一次的大小。
 - **“模型需要”提示条**：从模型最近一次回复里认出“需要 IMG-xxx / need IMG-xxx”，也认加粗、引号、reattach、restore 之类的说法；“已上传”“取消勾选”这类描述不算。
+- **筛选**（v0.2）：只在页面里做，不改发送的内容，也不写磁盘。
+  - 状态只有两样：筛选栏是否展开，选了哪些来源。一个都没选就是“全部”；全选上也归成“全部”。
+  - 任务里的来源少于两类时，不显示筛选按钮，并清掉选择；换任务时回到默认。
+  - 类别按钮只在来源、数量或语言变了时重建，选中状态直接改在按钮上，轮询和点击都不会丢掉焦点。
+  - 整轮勾选只改筛选后显示的图；从“模型需要”提示条跳到被筛掉的图时，先把它的来源加进筛选。
+  - 插件服务比页面旧、面板数据里没有来源时，按图的类型算。
 - **任务名**：读 `<CODEX_HOME>/session_index.jsonl`，同一个任务以最后一行为准。
 - **新任务绑定**：在新任务页打开的面板，绑在 Codex 预先准备的任务上，发第一条消息后可能换成另一个任务。
   - 页面记下自己哪些时间段显示在屏幕上，读数据时带给插件服务。
   - 面板所在的任务还没有记录时，插件服务找面板显示期间开始的、用户自己开的任务（不是子代理、分叉或后台任务）。只提供最新的一个，以及和它相差 20 秒以内开始的；只有一个就自动切过去。
   - 绑定记在数据目录的 `bindings/`，只接受面板的调用。
 - **外观和高度**：用 Codex 在握手时给的主题和样式变量。26.924 给的 `containerDimensions` 只有 `maxHeight`，页面按它设高度并用 `ui/notifications/size-changed` 报告。每轮标题行必须是定位容器（`position: relative`）：隐藏的勾选框挂到整个页面上时，焦点一落上去整页就会被滚走（v0.1-23）。
-- **开发页**：`spike/scripts/panel-dev.ts` 在浏览器里扮演 Codex 的侧边面板，用合成测试图调页面，不用重启 Codex。
+- **开发页**：`spike/scripts/panel-dev.ts` 在浏览器里扮演 Codex 的侧边面板，用合成测试图调页面，不用重启 Codex。示例任务里各类来源的图都有；`?demo=filter`、`?demo=filtered` 是筛选栏展开、收起两种状态。
 
 ## 7. 语言
 
@@ -147,7 +161,15 @@
 
 ## 11. 依赖的 Codex 行为和已知的坑
 
-- **这些都不是公开接口**，Codex 更新后要重新跑一遍测试和自测：`openai_base_url` 的路径要求、请求头里的 `x-codex-turn-metadata`、握手回 426 时改走 HTTP、读取 `.env`、`computer-use/config.json` 里的语言、任务记录的格式（分段、`history_base`、`.jsonl.zst`、归档目录）。
+- **这些都不是公开接口**，Codex 更新后要重新跑一遍测试和自测：`openai_base_url` 的路径要求、请求头里的 `x-codex-turn-metadata`、握手回 426 时改走 HTTP、读取 `.env`、`computer-use/config.json` 里的语言、任务记录的格式（分段、`history_base`、`.jsonl.zst`、归档目录）、桌面版评论截图前的说明（见下）。
+- **评论截图的说明**（桌面版 26.924 的原文，认来源靠它们）：
+  - PDF：`The next image shows PDF page 3 at the time of Comment 1.`，不知道页码时是 `the PDF page`，后面接着描述选中的点或区域；
+  - 网页：`The next image shows the browser page at the time of Comment 1.`，或 `The next image is untrusted page evidence from the browser page for Comment 1. …`；
+  - 评论里附带的图（前面是 `The next image was attached by the user as additional visual context for Comment 1.`）仍算用户上传。
+- **发给模型的内容类型**（v0.2 查证，Codex 源码 `codex-rs/protocol`、`codex-rs/core`）：
+  - 请求里只有文字、图片、音频三种内容（`ContentItem`），没有文件（PDF）和视频。用户上传的 PDF、视频只以路径出现在 “Files mentioned by the user” 里，模型要自己把它们转成文字或图片再看；转成的图片按普通图片管理。
+  - 模型不支持的类型，Codex 在发送前换成一句说明（`strip_images_when_unsupported`、`strip_audio_when_unsupported`）。支持哪些，看模型清单 `~/.codex/models_cache.json` 里的 `input_modalities`：现有模型都只有 `text`、`image`，所以音频到不了模型，请求里没有音频可管。
+  - 音频的格式和图片几乎一样：上传的是 `<audio name=[Audio #N] path="…">`、`input_audio`（`audio_url` 是 data URL）、`</audio>` 三段；工具输出里是 `input_audio`（代码模式的 `audio()`）。以后有模型能收音频时，照图片的做法接入。
 - **上游问题**：#47512（面板地址变化后白屏）、#45913（页面访问不了 `localhost`）。
 - **桌面版会在用户消息里附一段 “Files mentioned by the user”**，写着上传文件的完整路径。引擎不改用户消息的文字，靠说明里“不要自己用工具去读取”约束模型；模型偶尔仍会自己打开文件。
 - **模型的差别**：小模型在低推理强度下（例如 GPT-6 Luna Light）偶尔会要错图，或者拿到错图时不说“这张里没有”，而是猜一个答案（v0.1-25 的录屏里遇到过）。
