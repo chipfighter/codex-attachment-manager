@@ -17,7 +17,7 @@
 <p align="center"><b>English</b> · <a href="README_CN.md">简体中文</a></p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="Every image in the task is unchecked. Asked about v1's chat button, the model replies need IMG-002; the panel points to IMG-002, the user checks it, and the model answers from the image." width="100%">
+  <img src="docs/images/demo.gif" alt="The panel's filter shows only the PDF page, then every image again, and the uploads are unchecked a turn at a time. Asked about the chat button in the v1 desktop mockup, the model replies need IMG-001; the panel points to IMG-001, the user checks it, and the model answers from the image: orange." width="100%">
 </p>
 
 ## Why I built this
@@ -29,6 +29,7 @@ So I wanted to keep the long conversation going and decide, turn by turn, which 
 ## Features
 
 - **Every image in one list**: a *Context Assets* tab in Codex's side panel lists every image in the task, turn by turn: the ones you uploaded and the ones the model viewed or generated, with thumbnails, IDs and sizes. Click one to preview it.
+- **Filter by source**: with many images, show only some sources: your uploads, PDF pages you commented on in Codex (with the page number and the PDF's name), web page screenshots, and images the model viewed, got from a tool or generated. Filtering changes what you see, never what is sent.
 - **One click to leave an image out**: unchecked images become a short placeholder from the next message on. Toggle single images or a whole turn.
 - **Duplicates handled**: when an identical image is still being sent, the placeholder points to it.
 - **The model knows why**: a note tells the model the images were left out by you to save context, so its earlier answers still stand and it doesn't make up details it can't see.
@@ -85,6 +86,7 @@ The command installs the plugin with Codex's own CLI and sets up the proxy. Rest
 1. Open **Context Assets** in the side panel of a task. On a new chat you can open it before the first message; it switches to the task once you send.
 2. Uncheck the images you don't want to send anymore. Each change is saved at once and applies from the next message.
 3. When the model replies `need IMG-xxx` for an unchecked image, a bar at the top of the panel lists it. Click the ID to jump to the image and check it.
+4. With many images, click the filter button next to refresh and pick the sources to show. A turn's checkbox then covers only the images shown.
 
 ## Uninstall
 
@@ -110,7 +112,7 @@ Your selections and logs stay in the data folder (see [Privacy](#privacy)); dele
 
 ## Good to know
 
-- Only images are managed for now; other file types may come later.
+- Only images are managed, because they are the only files that reach the model as they are. Codex doesn't send PDFs or videos themselves, only text the model extracts from them or images it makes of them, and those images are listed like any other. Audio waits for a Codex model that accepts it: until then, Codex replaces audio with a short note before sending.
 - Results of Codex's built-in image generation can't be unchecked.
 - If you uncheck an image while a turn is still running over WebSocket, the rest of that turn still carries the original. The panel tells you; the change applies from the next message.
 - Enabling, disabling and upgrading take effect after you restart Codex.

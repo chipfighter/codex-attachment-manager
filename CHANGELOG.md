@@ -2,6 +2,22 @@
 
 When a version is released, its section here becomes the GitHub release notes.
 
+## [0.2.0] - 2026-09-29
+
+Filter the panel's list by where each image came from.
+
+### Features
+
+- A filter button next to refresh unfolds the task's sources, each with its count: uploads, PDF pages, web page screenshots, and images the model viewed, got from a tool or generated. Pick one or several to show only their images; *All* shows everything again. The button shows only when a task has images from two sources or more, and it keeps a dot while a filter is on and the bar is folded away.
+- The screenshots Codex attaches when you comment on a PDF page or a web page are told apart from your uploads. A PDF page shows its page number and the PDF's name.
+- Filtering changes what you see, never what is sent: the request estimate still counts every image, a turn's checkbox covers only the images shown, and jumping to an image the model asked for shows it even when the filter hides it.
+- The text sent to the model is the same as in 0.1.0.
+
+### Notes
+
+- Only images are managed, because Codex sends the model text and images only. PDFs and videos reach the model as text or images the model makes of them, and those images are listed like any other. The models in Codex don't accept audio yet, so Codex replaces audio with a short note before sending; audio support waits for a model that accepts it.
+- Platforms are the same as in 0.1.0: tested on Windows with the Codex desktop app 26.924; CI checks that the plugin installs and starts on macOS and Linux.
+
 ## [0.1.0] - 2026-09-28
 
 The first public release (MVP): in the same Codex task, decide turn by turn which past images go to the model with your next message.
