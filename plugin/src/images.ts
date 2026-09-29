@@ -1,11 +1,14 @@
 // Purpose: P2 — find every image in a list of Responses items (a request's `input`, or a rollout's response_items)
 // and describe it: a key that names the same occurrence in both places, its kind and name, and a content digest.
+// v0.2 — the source the panel filters by: the kind, except for the screenshots Codex desktop attaches to a comment on a
+// PDF page or a web page, told apart by the caption Codex writes before them. The text for the model does not use it.
 // Input: items as parsed JSON. Output: ImageRef[] in item order (pure, no I/O).
 
 import { createHash } from "node:crypto";
 
 type Json = Record<string, any>;
 export type ImageKind = "upload" | "view" | "generated" | "tool";
+export type ImageSource = ImageKind | "pdf" | "browser";
 export type ImageDigest = { contentId: string; mime: string | null; base64Chars: number; width: number | null; height: number | null };
 
 export type ImageRef = ImageDigest & {
@@ -22,9 +25,19 @@ export type ImageRef = ImageDigest & {
   name: string | null;
   label: string | null;
   turnId: string | null;
+  source: ImageSource;
+  // A PDF comment screenshot's page (null when Codex does not say), and the PDF's file name when the message's comments
+  // name only one PDF.
+  pdfPage: number | null;
+  pdfName: string | null;
 };
 
 const OPEN_TAG = /^<image name=(\[Image #\d+\]) path="(.*)">$/s;
+// Codex desktop 26.924's own wording: the caption right before a comment's screenshot, and the line naming the PDF in
+// the comment's text. Worded otherwise, a screenshot counts as an upload, as it did before v0.2.
+const PDF_CAPTION = /^The next image shows (?:PDF page (\d+)|the PDF page) at the time of Comment \d+\./;
+const BROWSER_CAPTION = /^The next image (?:shows the browser page at the time of|is untrusted page evidence from the browser page for) Comment \d+\./;
+const PDF_PATH = /^PDF path: (.+)$/gm;
 
 export function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -95,6 +108,12 @@ function toolContext(call: Json | undefined, output: Json[]): { kind: ImageKind;
   return { kind: /image_gen|imagegen|generatedImage\(/.test(source) ? "generated" : "tool", names: [] };
 }
 
+// The PDF a message's comments are about, when they name only one.
+function onlyPdf(parts: Json[]): string | null {
+  const paths = new Set(parts.flatMap((part) => (part?.type === "input_text" && typeof part.text === "string" ? [...part.text.matchAll(PDF_PATH)].map((m) => m[1].trim()) : [])));
+  return paths.size === 1 ? baseName([...paths][0]) : null;
+}
+
 export function findImages(items: Json[]): ImageRef[] {
   const calls = new Map<string, Json>();
   const seenFallback = new Map<string, number>();
@@ -114,12 +133,14 @@ export function findImages(items: Json[]): ImageRef[] {
 
     if (item.type === "image_generation_call" && typeof item.result === "string" && item.result) {
       const found = digest(item, item.result, "image/png");
-      refs.push({ ...found, key: keyFor(0, found.contentId), item: index, part: null, openTag: null, closeTag: null, kind: "generated", replaceable: false, name: null, label: null, turnId });
+      refs.push({ ...found, key: keyFor(0, found.contentId), item: index, part: null, openTag: null, closeTag: null, kind: "generated", replaceable: false, name: null, label: null, turnId, source: "generated", pdfPage: null, pdfName: null });
       return;
     }
     const field = item.type === "message" ? item.content : item.type === "function_call_output" || item.type === "custom_tool_call_output" ? item.output : null;
     if (!Array.isArray(field)) return;
     const context = item.type === "message" ? null : toolContext(calls.get(item.call_id), field);
+    // Read once per message, and only for one with a PDF comment screenshot.
+    let pdfName: string | null | undefined;
     let n = 0;
     field.forEach((part: Json, partIndex: number) => {
       const found = partDigest(part);
@@ -130,6 +151,10 @@ export function findImages(items: Json[]): ImageRef[] {
       const close = open && after === "</image>";
       const tag = before ? OPEN_TAG.exec(before) : null;
       const kind: ImageKind = context?.kind ?? (item.role === "user" ? "upload" : "tool");
+      // A caption counts only as its own text part right before an image in the user's message.
+      const pdf = kind === "upload" ? before?.match(PDF_CAPTION) : null;
+      const source: ImageSource = pdf ? "pdf" : kind === "upload" && before !== null && BROWSER_CAPTION.test(before) ? "browser" : kind;
+      if (pdf && pdfName === undefined) pdfName = onlyPdf(field);
       refs.push({
         ...found,
         key: keyFor(n, found.contentId),
@@ -142,6 +167,9 @@ export function findImages(items: Json[]): ImageRef[] {
         name: tag ? baseName(tag[2]) : context?.names[n] ?? null,
         label: tag ? tag[1] : null,
         turnId,
+        source,
+        pdfPage: pdf?.[1] ? Number(pdf[1]) : null,
+        pdfName: pdf ? pdfName ?? null : null,
       });
       n++;
     });

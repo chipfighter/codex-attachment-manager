@@ -3,9 +3,11 @@
 // P4 — serves each image for the panel's thumbnails and previews, and the inputs of its "next message" estimate:
 // the last full request as a size baseline, which images it carried, and whether the engine could not rewrite it.
 // v0.1-9 — the task's name for the title (thread-names.ts). v0.1-13 — whether part of the history could not be found.
+// v0.2 — each image's source, which the panel filters by.
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
+import type { ImageSource } from "./images.ts";
 import { dataDir, requestStatsDirOf, selectionDirOf } from "./paths.ts";
 import { readRequestStats, type RequestStats } from "./request-stats.ts";
 import { effectiveSelection, writeSelection } from "./selection.ts";
@@ -17,6 +19,8 @@ type Json = Record<string, any>;
 type Record_ = { type: string; payload: Json };
 export type PanelImage = {
   id: string; kind: string; name: string | null; label: string | null; turn: number | null;
+  // v0.2 — what the panel filters by; a PDF comment screenshot also says its page and the PDF's name when known.
+  source: ImageSource; pdfPage: number | null; pdfName: string | null;
   width: number | null; height: number | null; bytes: number; base64Chars: number;
   sameAs: string[]; checked: boolean; replaceable: boolean; requested: boolean;
   // Whether the last full request carried it (null: no such request recorded yet), and whether the next one will
@@ -127,6 +131,7 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
     const inLast = carried ? image.key in carried : null;
     return {
       id: image.id, kind: image.kind, name: image.name, label: image.label, turn: image.turn,
+      source: image.source, pdfPage: image.pdfPage, pdfName: image.pdfName,
       width: image.width, height: image.height, bytes: image.bytes, base64Chars: image.base64Chars,
       sameAs: sameContent(index, image),
       checked: !unchecked.has(image.key),

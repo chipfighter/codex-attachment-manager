@@ -13,6 +13,7 @@ import { requestStatsDirOf } from "../../plugin/src/paths.ts";
 import { recordRequest } from "../../plugin/src/request-stats.ts";
 import { assistant, line, red, sampleSessions, THREAD, turn, upload } from "./testfixtures.ts";
 import { shrink } from "../../plugin/src/thumbnail.ts";
+import { png } from "./testkit.ts";
 
 const records = (text: string) => text.trim().split("\n").map((raw) => JSON.parse(raw));
 
@@ -64,6 +65,26 @@ test("panel state lists every image with checked, same-content and requested fla
   assert.equal(state.totals.checkedBytes, state.totals.allBytes);
   assert.deepEqual(state.send, { baseline: null, last: null, notice: null });
   assert.deepEqual(state.images.map((image) => [image.inLastRequest, image.inNextRequest]), [[null, true], [null, true], [null, true]], "without a recorded request every image counts");
+});
+
+// v0.2 — what the panel filters by, and what it says about a PDF comment screenshot.
+test("panel images carry their source, and a PDF page its page and the PDF's name", () => {
+  const page = png(12, 16, (x, y) => [250, 250, (x * y) % 256]);
+  const options = sampleSessions(turn("t3") + line("response_item", {
+    type: "message", id: "msg_3", role: "user",
+    content: [
+      { type: "input_text", text: "PDF path: C:\\docs\\report.pdf\nPDF page: 3/12\n" },
+      { type: "input_text", text: "The next image shows PDF page 3 at the time of Comment 1. The selected region is outlined in blue and marked by comment marker 1." },
+      { type: "input_image", image_url: `data:image/png;base64,${page.toString("base64")}` },
+    ],
+    internal_chat_message_metadata_passthrough: { turn_id: "t3" },
+  }));
+  assert.deepEqual(loadPanelState(THREAD, options).images.map((image) => [image.id, image.source, image.pdfPage, image.pdfName]), [
+    ["IMG-001", "upload", null, null],
+    ["IMG-002", "upload", null, null],
+    ["IMG-003", "upload", null, null],
+    ["IMG-004", "pdf", 3, "report.pdf"],
+  ]);
 });
 
 test("the size baseline: images the last request carried, images added since, and images compacted away", () => {
