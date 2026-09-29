@@ -84,17 +84,19 @@ test("view_image through a variable path is still a viewed image; single-quoted 
   assert.deepEqual(findImages(items).map((r) => [r.kind, r.name]), [["view", null], ["view", "e.png"]]);
 });
 
-// v0.2 — Codex desktop (26.924) comments on a PDF or a web page: the comment's text (with "PDF path:" and "PDF page:"
-// lines for a PDF), then per comment a caption and the screenshot, a plain image without tags. The captions and the two
-// lines are Codex's own wording; how the rest of the comment text is laid out is assumed here.
+// v0.2 — Codex desktop (26.924) comments on a PDF or a web page: one text part with the comments (for a PDF with
+// "PDF path:" and "PDF page:" lines), then per comment a caption and the screenshot, a plain image without tags. Laid out
+// as in a real PDF comment the user made on 2026-09-29; the content here is made up.
 const text = (value: string) => ({ type: "input_text", text: value });
 const plain = (bytes: Buffer) => ({ type: "input_image", image_url: url(bytes), detail: "high" });
 const comments = (parts: Array<Record<string, any>>) => ({ type: "message", id: "msg_c", role: "user", content: parts, internal_chat_message_metadata_passthrough: { turn_id: "turn-1" } });
+const pdfComment = (n: number, path: string, page: number, comment: string) =>
+  `## User Comment ${n}\nFile: pdf:${path.split(/[\\/]/).pop()}\nSide: R\nLines: 1\nPDF path: ${path}\nPDF page: ${page}/12\nPDF annotation: point at top-left (175, 669) on 595x842 page; coordinates use top-left page origin; bottom-left PDF drawing point is (175, 173)\nAnnotated PDF screenshot: attached as a labeled image for Comment ${n}\nComment:\n${comment}\n\n`;
+const diffComments = (...blocks: string[]) => `\n# Diff comments:\n\n${blocks.join("")}## My request:\n\n`;
 
 test("Codex's PDF comment screenshots are PDF pages, with the page, and the PDF's name when the message names one PDF", () => {
   const refs = findImages([comments([
-    text("Comment 1: 标题改大一点\nPDF path: C:\\docs\\report.pdf\nPDF page: 3/12\n"),
-    text("Comment 2: 这张表\nPDF path: C:\\docs\\report.pdf\nPDF page: 5/12\n"),
+    text(diffComments(pdfComment(1, "C:/docs/report.pdf", 3, "标题改大一点"), pdfComment(2, "C:/docs/report.pdf", 5, "这张表"))),
     text("The next image shows PDF page 3 at the time of Comment 1. The selected region is outlined in blue and marked by comment marker 1."),
     plain(red),
     text("The next image shows the PDF page at the time of Comment 2. The selected point is marked in blue by comment marker 2."),
@@ -108,8 +110,7 @@ test("Codex's PDF comment screenshots are PDF pages, with the page, and the PDF'
 
 test("a message about two PDFs names neither", () => {
   const refs = findImages([comments([
-    text("PDF path: C:\\docs\\a.pdf\nPDF page: 1/2\n"),
-    text("PDF path: /home/u/b.pdf\nPDF page: 2/2\n"),
+    text(diffComments(pdfComment(1, "C:\\docs\\a.pdf", 1, "一"), pdfComment(2, "/home/u/b.pdf", 2, "二"))),
     text("The next image shows PDF page 1 at the time of Comment 1. The selected point is marked in blue by comment marker 1."),
     plain(red),
   ])]);

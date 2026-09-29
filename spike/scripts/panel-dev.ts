@@ -73,8 +73,11 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
   turn("t4") + upload("msg_4", "t4", [["settings-screenshot.png", screenshot]]) +
   line("response_item", { type: "image_generation_call", id: "ig_1", status: "completed", result: png(256, 256, (x, y) => [x, y, 180]).toString("base64") }) + say("需要 IMG-001 才能回答。", "t4") +
   turn("t5") + commented("msg_5", "t5", [
-    { type: "input_text", text: "按评论改一下宣传册" },
-    { type: "input_text", text: "Comment 1: 标题再大一点\nPDF path: C:\\docs\\宣传册.pdf\nPDF page: 3/12\n\nComment 2: 这张表的数字对不上\nPDF path: C:\\docs\\宣传册.pdf\nPDF page: 5/12\n" },
+    // Laid out as Codex desktop 26.924 writes PDF comments (seen in a real one on 2026-09-29).
+    { type: "input_text", text: "\n# Diff comments:\n\n" +
+      "## User Comment 1\nFile: pdf:宣传册.pdf\nSide: R\nLines: 1\nPDF path: C:/docs/宣传册.pdf\nPDF page: 3/12\nPDF annotation: region at top-left (60, 90) on 595x842 page\nAnnotated PDF screenshot: attached as a labeled image for Comment 1\nComment:\n标题再大一点\n\n" +
+      "## User Comment 2\nFile: pdf:宣传册.pdf\nSide: R\nLines: 1\nPDF path: C:/docs/宣传册.pdf\nPDF page: 5/12\nPDF annotation: point at top-left (300, 420) on 595x842 page\nAnnotated PDF screenshot: attached as a labeled image for Comment 2\nComment:\n这张表的数字对不上\n\n" +
+      "## My request:\n按评论改一下宣传册\n" },
     { type: "input_text", text: "The next image shows PDF page 3 at the time of Comment 1. The selected region is outlined in blue and marked by comment marker 1." },
     { type: "input_image", image_url: url(pdfPage(3)) },
     { type: "input_text", text: "The next image shows PDF page 5 at the time of Comment 2. The selected point is marked in blue by comment marker 2." },
