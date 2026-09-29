@@ -28,7 +28,7 @@ body:
     id: plugin
     attributes:
       label: 插件版本 / Plugin version
-      placeholder: "0.1.0"
+      placeholder: "0.2.0"
   - type: textarea
     id: what
     attributes:
