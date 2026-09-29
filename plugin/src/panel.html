@@ -27,6 +27,8 @@
   v0.1-21: Codex 26.924 gives the page no fixed height, only the most it may take; by MCP Apps the page reports the
   height it wants (size-changed): it asks for all of it, and fits a smaller frame if that is what it gets.
   v0.1-23: the panel never scrolls as a whole; only the list does (a turn's hidden checkbox once let it).
+  v0.2 (user 2026-09-29): a filter button next to 刷新 unfolds a bar of the task's sources (uploaded, PDF page, web page,
+  viewed, tool result, generated); picking some shows only their images. It changes what is shown, never what is sent.
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -82,6 +84,10 @@
   .icon-quiet svg { width: 16px; height: 16px; }
   .icon-quiet.spinning svg { animation: spin .8s linear infinite; }
   .icon-quiet.stale { color: var(--warn); }
+  /* v0.2: the filter button, and a dot on it while a filter is on and the bar is folded away. */
+  #filter { position: relative; }
+  #filter[aria-expanded="true"] { background: var(--bg-soft); color: var(--text-2); }
+  #filter .dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--info); box-shadow: 0 0 0 2px var(--bg); }
   @keyframes spin { to { transform: rotate(360deg); } }
   .plugin { display: flex; gap: 6px; }
   .plugin:empty { display: none; }
@@ -108,6 +114,13 @@
   .needs button { height: 22px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-radius: 999px; background: var(--bg); color: var(--warn); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, transform .1s; }
   .needs button:hover { border-color: var(--warn); }
   .needs button:active { transform: scale(.96); }
+  /* v0.2: rounded source buttons, drawn unlike the rows' square send checkboxes so the two are not confused. */
+  .filters { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { height: 26px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background .15s, border-color .15s, color .15s; }
+  .chip:hover { background: var(--bg-hover); }
+  .chip .n { margin-left: 5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+  .chip[aria-pressed="true"] { border-color: color-mix(in srgb, var(--info) 55%, transparent); background: var(--info-bg); color: var(--text); }
+  .chip[aria-pressed="true"] .n { color: var(--text-2); }
 
   main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 18px; border-top: 1px solid var(--border); scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
   /* position: the hidden checkbox inside stays in this line. Without it, it hung off the page far down the list, the
@@ -215,7 +228,7 @@
 </head>
 <body>
 <header>
-  <div class="title"><h1 id="title">上下文素材</h1><span class="count" id="count"></span><div class="actions"><button class="icon-quiet" id="refresh" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button><span class="plugin" id="plugin"></span></div></div>
+  <div class="title"><h1 id="title">上下文素材</h1><span class="count" id="count"></span><div class="actions"><button class="icon-quiet" id="filter" type="button" hidden aria-expanded="false" aria-controls="filters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg><span class="dot" hidden></span></button><button class="icon-quiet" id="refresh" type="button" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg></button><span class="plugin" id="plugin"></span></div></div>
   <div class="plan" id="plan">正在读取…</div>
   <div class="meter" id="meter" hidden>
     <div class="meter-head"><span id="meterLabel"></span><b id="meterValue"></b><span class="meter-full" id="meterFull"></span></div>
@@ -223,6 +236,7 @@
   </div>
   <div class="last" id="last"></div>
   <div class="needs" id="needs" hidden></div>
+  <div class="filters" id="filters" role="group" hidden></div>
 </header>
 <main id="main"></main>
 <footer>
@@ -253,6 +267,9 @@
       "refresh": "刷新",
       "refresh.at": "刷新（上次更新 {time}）",
       "refresh.stale": "刷新（有一会儿没更新了；上次更新 {time}）",
+      "filter.toggle": "按来源筛选",
+      "filter.all": "全部",
+      "count.shown": "显示 {shown} 张，共 {total} 张",
       "plugin.disable": "停用插件",
       "plugin.enable": "启用插件",
       "plan.loading": "正在读取…",
@@ -274,6 +291,8 @@
       "kind.view": "查看的图片",
       "kind.generated": "生成的图片",
       "kind.tool": "工具返回",
+      "kind.pdf": "PDF 页面",
+      "kind.browser": "网页截图",
       "tag.locked": "无法取消",
       "tag.gone": "已不在上下文",
       "tag.requested": "模型需要这张",
@@ -286,7 +305,10 @@
       "turn.earlier": "更早",
       "turn.all": "发送第 {n} 轮的全部图片",
       "turn.allEarlier": "发送更早的全部图片",
+      "turn.shown": "发送第 {n} 轮列出的图片",
+      "turn.shownEarlier": "发送更早列出的图片",
       "row.unnamed": "未命名",
+      "row.pdfPage": "PDF 第 {page} 页",
       "row.preview": "预览 {id}",
       "row.send": "发送 {id}",
       "thumb.none": "无预览",
@@ -332,6 +354,9 @@
       "refresh": "Refresh",
       "refresh.at": "Refresh (last updated {time})",
       "refresh.stale": "Refresh (not updated for a while; last updated {time})",
+      "filter.toggle": "Filter by source",
+      "filter.all": "All",
+      "count.shown": "Showing {shown} of {total} images",
       "plugin.disable": "Disable plugin",
       "plugin.enable": "Enable plugin",
       "plan.loading": "Loading…",
@@ -357,6 +382,8 @@
       "kind.view": "Viewed",
       "kind.generated": "Generated",
       "kind.tool": "Tool result",
+      "kind.pdf": "PDF page",
+      "kind.browser": "Web page",
       "tag.locked": "Can't uncheck",
       "tag.gone": "No longer in context",
       "tag.requested": "The model needs this",
@@ -370,7 +397,10 @@
       "turn.earlier": "Earlier",
       "turn.all": "Send all images from turn {n}",
       "turn.allEarlier": "Send all earlier images",
+      "turn.shown": "Send the listed images from turn {n}",
+      "turn.shownEarlier": "Send the listed earlier images",
       "row.unnamed": "Unnamed",
+      "row.pdfPage": "PDF page {page}",
       "row.preview": "Preview {id}",
       "row.send": "Send {id}",
       "thumb.none": "No preview",
@@ -544,6 +574,7 @@
     switching: false,              // a 启用插件 / 停用插件 call is under way
     switchingTask: false,          // a cam_bind call is under way
     manual: false,                 // the running refresh was asked for with the 刷新 button
+    filter: { open: false, sources: new Set() },   // v0.2: the filter bar, and the sources shown (none picked: all)
   };
   let lastFresh = 0;               // when the panel last received the thread's state
   // When this page was on screen (v0.1-10), sent with every read: a panel on a new chat is offered the threads started
@@ -565,6 +596,7 @@
     S.signature = signature;
     if (S.threadId && state.threadId !== S.threadId) {
       S.unsaved.clear(); S.thumbs.clear(); thumbQueue.length = 0; thumbsInFlight.clear(); closeViewer();
+      S.filter = { open: false, sources: new Set() };
     }
     S.threadId = state.threadId;
     S.data = state;
@@ -719,7 +751,12 @@
   emptyState.className = "empty";
   emptyState.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="2.5"/><path d="M7 3h10.5A3.5 3.5 0 0 1 21 6.5V16"/><circle cx="8" cy="11" r="1.5"/><path d="m3.5 18 4.5-4.5 3 3 2-2 3.5 3.5"/></svg><strong></strong><span></span>';
   const formatBytes = (bytes) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  const describe = (image) => [MESSAGES[lang][`kind.${image.kind}`] ? t(`kind.${image.kind}`) : image.kind, image.width && image.height ? `${image.width}×${image.height}` : null, formatBytes(image.bytes)].filter(Boolean).join(" · ");
+  // v0.2: an image from a plugin server older than the page has no source; its kind is its source.
+  const sourceOf = (image) => image.source ?? image.kind;
+  const sourceLabel = (image) => (sourceOf(image) === "pdf" && image.pdfPage ? t("row.pdfPage", { page: image.pdfPage }) : MESSAGES[lang][`kind.${sourceOf(image)}`] ? t(`kind.${sourceOf(image)}`) : image.kind);
+  const describe = (image) => [sourceLabel(image), image.width && image.height ? `${image.width}×${image.height}` : null, formatBytes(image.bytes)].filter(Boolean).join(" · ");
+  // A PDF comment screenshot goes by its PDF's name when the comment says which one.
+  const nameOf = (image) => image.pdfName ?? image.name ?? t("row.unnamed");
 
   // An unchecked image becomes a duplicate placeholder when a copy of the same content is still sent in that request.
   const sentCopyOf = (image) => image.sameAs.find((id) => { const other = byId(id); return other && other.inNextRequest && isChecked(other); });
@@ -783,27 +820,28 @@
     label.className = "turn";
     label.innerHTML = '<span class="turn-name"></span><label class="check"><input type="checkbox"><span class="box"></span></label>';
     label.querySelector(".turn-name").textContent = turn === null ? t("turn.earlier") : t("turn.n", { n: turn });
-    const all = turn === null ? t("turn.allEarlier") : t("turn.all", { n: turn });
-    label.querySelector(".check").title = all;
     const input = label.querySelector("input");
-    input.setAttribute("aria-label", all);
     // A click on a checked box unchecks them all; on a mixed or empty one it checks them all.
     input.addEventListener("change", () => setTurn(turn, input.checked));
     return label;
   }
-  // Hidden below two images: the row's own checkbox does the same.
-  function paintTurn(label, group) {
+  // Hidden below two images: the row's own checkbox does the same. v0.2: it covers the images shown, and says so while
+  // a filter is on.
+  function paintTurn(label, turn, group) {
     const targets = group.filter(changeable);
     const checked = targets.filter(isChecked).length;
     const box = label.querySelector(".check");
     box.hidden = targets.length < 2;
+    const all = turn === null ? t(filtering() ? "turn.shownEarlier" : "turn.allEarlier") : t(filtering() ? "turn.shown" : "turn.all", { n: turn });
+    box.title = all;
     const input = box.querySelector("input");
+    input.setAttribute("aria-label", all);
     input.checked = checked > 0 && checked === targets.length;
     input.indeterminate = checked > 0 && checked < targets.length;
   }
-  // Saved at once, like every check (v0.1-21, user 2026-09-27).
+  // Saved at once, like every check (v0.1-21, user 2026-09-27). v0.2: the images shown only.
   function setTurn(turn, checked) {
-    change(images().filter((image) => image.turn === turn && changeable(image)).map((image) => image.id), checked);
+    change(images().filter((image) => image.turn === turn && changeable(image) && inFilter(image)).map((image) => image.id), checked);
   }
 
   function paintThumb(row, id) {
@@ -824,7 +862,7 @@
     row.classList.toggle("off", !checked);
     row.querySelector(".thumb").setAttribute("aria-label", t("row.preview", { id: image.id }));
     row.querySelector(".id").textContent = image.id;
-    row.querySelector(".name").textContent = image.name ?? t("row.unnamed");
+    row.querySelector(".name").textContent = nameOf(image);
     row.querySelector(".meta").textContent = describe(image);
     const input = row.querySelector("input");
     input.checked = checked;
@@ -847,7 +885,9 @@
     const title = !S.data ? t("title.loading") : S.data.title ?? (S.data.started === false ? t("title.newTask") : t("title.unnamed"));
     $("title").textContent = title;
     $("title").title = title;
-    $("count").textContent = list.length ? String(list.length) : "";
+    const listed = list.filter(inFilter).length;
+    $("count").textContent = !list.length ? "" : filtering() ? `${listed}/${list.length}` : String(list.length);
+    $("count").title = filtering() ? t("count.shown", { shown: listed, total: list.length }) : "";
     if (!S.data || !list.length) {
       plan.textContent = !S.data ? (S.error ? t("plan.failed") : t("plan.loading")) : t("plan.empty");
       $("meter").hidden = true;
@@ -976,6 +1016,9 @@
   let flashAfterScroll = null;
   main.addEventListener("scrollend", () => flashAfterScroll?.());
   function jumpTo(id) {
+    const image = byId(id);
+    // v0.2: an image the filter hides is shown first, with the rest of its source.
+    if (image && !inFilter(image)) { S.filter.sources.add(sourceOf(image)); settleFilter(); render(); }
     const row = rows.get(id);
     if (!row) return;
     row.querySelector("input").focus({ preventScroll: true });
@@ -996,6 +1039,60 @@
     void row.offsetWidth;            // restarts the animation when the same row is picked again
     row.classList.add("flash");
     flashTimers.set(row, setTimeout(() => { row.classList.remove("flash"); flashTimers.delete(row); }, 1300));
+  }
+
+  // ---- v0.2: the list filtered by source (user 2026-09-29); it changes what is shown, never what is sent ----
+  const SOURCES = ["upload", "pdf", "browser", "view", "tool", "generated"];
+  const filtering = () => S.filter.sources.size > 0;
+  const inFilter = (image) => !filtering() || S.filter.sources.has(sourceOf(image));
+  // The task's sources in a fixed order, with how many images each has.
+  function sourceCounts() {
+    const counts = new Map();
+    for (const image of images()) counts.set(sourceOf(image), (counts.get(sourceOf(image)) ?? 0) + 1);
+    return SOURCES.filter((source) => counts.has(source)).map((source) => [source, counts.get(source)]);
+  }
+  // Every source picked is the same as none: 全部.
+  function settleFilter() {
+    if (S.filter.sources.size >= sourceCounts().length) S.filter.sources.clear();
+  }
+  function pickSource(source) {
+    if (source === "all") S.filter.sources.clear();
+    else if (!S.filter.sources.delete(source)) S.filter.sources.add(source);
+    settleFilter();
+    render();
+  }
+  function makeChip(source, label, count) {
+    const chip = Object.assign(document.createElement("button"), { type: "button", className: "chip" });
+    chip.dataset.source = source;
+    chip.append(label);
+    if (count !== null) chip.append(Object.assign(document.createElement("span"), { className: "n", textContent: String(count) }));
+    chip.addEventListener("click", () => pickSource(source));
+    return chip;
+  }
+  // Shown for a task with two sources or more. The chips are rebuilt only when the sources or their counts change, so
+  // hover and focus survive the polling and the clicks.
+  let filterKey = "";
+  function renderFilter() {
+    const counts = sourceCounts();
+    const usable = counts.length >= 2;
+    const present = new Set(counts.map(([source]) => source));
+    for (const source of S.filter.sources) if (!usable || !present.has(source)) S.filter.sources.delete(source);
+    if (!usable) S.filter.open = false;
+    const button = $("filter");
+    button.hidden = !usable;
+    button.title = t("filter.toggle");
+    button.setAttribute("aria-label", t("filter.toggle"));
+    button.setAttribute("aria-expanded", String(S.filter.open));
+    button.querySelector(".dot").hidden = S.filter.open || !filtering();
+    const bar = $("filters");
+    bar.hidden = !S.filter.open;
+    bar.setAttribute("aria-label", t("filter.toggle"));
+    const key = `${lang}|${counts.map(([source, count]) => `${source}:${count}`).join(",")}`;
+    if (key !== filterKey) {
+      filterKey = key;
+      bar.replaceChildren(makeChip("all", t("filter.all"), null), ...counts.map(([source, count]) => makeChip(source, t(`kind.${source}`), count)));
+    }
+    for (const chip of bar.children) chip.setAttribute("aria-pressed", String(chip.dataset.source === "all" ? !filtering() : S.filter.sources.has(chip.dataset.source)));
   }
 
   function renderRefresh() {
@@ -1021,13 +1118,14 @@
     if (sendNotice?.kind === "websocket") nodes.push(notice("warn", t("notice.websocket")));
     const list = images();
     if (S.data && !list.length) nodes.push(emptyState);
+    const listed = list.filter(inFilter);
     let turn;
-    for (const image of list) {
+    for (const image of listed) {
       if (image.turn !== turn) {
         turn = image.turn;
         if (!turnLabels.has(turn)) turnLabels.set(turn, makeTurnLabel(turn));
         const label = turnLabels.get(turn);
-        paintTurn(label, list.filter((other) => other.turn === turn));
+        paintTurn(label, turn, listed.filter((other) => other.turn === turn));
         nodes.push(label);
       }
       let row = rows.get(image.id);
@@ -1040,7 +1138,7 @@
     // Only touch the list when its items changed, so scrolling and keyboard focus are kept.
     const current = main.children;
     if (nodes.length !== current.length || nodes.some((node, index) => node !== current[index])) main.replaceChildren(...nodes);
-    for (const image of list) queueThumb(image.id);
+    for (const image of listed) queueThumb(image.id);
   }
 
   // Always the same line: a check needs no word that it was saved (user 2026-09-28).
@@ -1054,7 +1152,7 @@
     if (!image) { viewer.hidden = true; return; }
     viewer.hidden = false;
     $("viewerId").textContent = image.id;
-    $("viewerName").textContent = image.name ?? t("row.unnamed");
+    $("viewerName").textContent = nameOf(image);
     $("viewerMeta").textContent = [image.turn === null ? null : t("turn.n", { n: image.turn }), describe(image)].filter(Boolean).join(" · ");
     const input = $("viewerCheck").querySelector("input");
     input.checked = isChecked(image);
@@ -1071,7 +1169,7 @@
     }
   }
 
-  function render() { renderHeader(); renderNeeds(); renderPlugin(); renderRefresh(); renderList(); renderFooter(); renderViewer(); }
+  function render() { renderFilter(); renderHeader(); renderNeeds(); renderPlugin(); renderRefresh(); renderList(); renderFooter(); renderViewer(); }
 
   let focusBeforeViewer = null;
   function openViewer(id) {
@@ -1097,6 +1195,7 @@
   $("viewerCheck").querySelector("input").addEventListener("change", (event) => { if (S.viewer) setChecked(S.viewer.id, event.target.checked); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && S.viewer) closeViewer(); });
   $("refresh").addEventListener("click", () => refresh(true));
+  $("filter").addEventListener("click", () => { S.filter.open = !S.filter.open; render(); });
 
   // ---- start: handshake, then Codex sends its own cam_panel result; poll so new images show up ----
   if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
