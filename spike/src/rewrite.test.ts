@@ -162,3 +162,20 @@ test("the same selection always produces the same text", () => {
   const selected = keys("IMG-001", "IMG-003");
   assert.equal(JSON.stringify(rewriteItems(input, describe, selected, noPixels).items), JSON.stringify(rewriteItems(items(), describe, selected, noPixels).items));
 });
+
+// v0.2 (user 2026-09-29): the panel tells Codex's comment screenshots apart, but the text for the model stays as in
+// v0.1: such an image is replaced like an upload, and the caption Codex wrote before it still says which page it was.
+test("a PDF comment screenshot is replaced like an upload, and Codex's caption before it stays", () => {
+  const caption = "The next image shows PDF page 3 at the time of Comment 1. The selected region is outlined in blue and marked by comment marker 1.";
+  const input = [{
+    type: "message", id: "msg_1", role: "user",
+    content: [{ type: "input_text", text: "PDF path: C:\\docs\\report.pdf\nPDF page: 3/12\n" }, { type: "input_text", text: caption }, { type: "input_image", image_url: url(red), detail: "high" }],
+  }];
+  const { describe, keys } = index(input);
+  const { items: out } = rewriteItems(input, describe, keys("IMG-001"), noPixels);
+  assert.deepEqual(texts(out.find((item) => item.id === "msg_1")!), [
+    "PDF path: C:\\docs\\report.pdf\nPDF page: 3/12\n",
+    caption,
+    "[图片 IMG-001 已省略｜未命名｜用户上传｜第 1 轮｜4×4]\n原图被用户省略以节省上下文，情况见前面的“上下文管理说明”；需要重新看这张图时，在回复里写出“需要 IMG-001”。",
+  ]);
+});
