@@ -17,7 +17,7 @@
 <p align="center"><a href="README.md">English</a> · <b>简体中文</b></p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="任务里的图全部取消勾选。问起 v1 的聊天按钮，模型回复 need IMG-002；面板指出 IMG-002，用户勾上它，模型看图答出颜色。" width="100%">
+  <img src="docs/images/demo.gif" alt="面板的筛选先只显示 PDF 页面，再恢复显示全部，上传的图按整轮取消勾选。问起 v1 桌面版的聊天按钮，模型回复 need IMG-001；面板指出 IMG-001，用户勾上它，模型看图答出橙色。" width="100%">
 </p>
 
 ## 为什么做这个

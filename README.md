@@ -17,7 +17,7 @@
 <p align="center"><b>English</b> · <a href="README_CN.md">简体中文</a></p>
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="Every image in the task is unchecked. Asked about v1's chat button, the model replies need IMG-002; the panel points to IMG-002, the user checks it, and the model answers from the image." width="100%">
+  <img src="docs/images/demo.gif" alt="The panel's filter shows only the PDF page, then every image again, and the uploads are unchecked a turn at a time. Asked about the chat button in the v1 desktop mockup, the model replies need IMG-001; the panel points to IMG-001, the user checks it, and the model answers from the image: orange." width="100%">
 </p>
 
 ## Why I built this
