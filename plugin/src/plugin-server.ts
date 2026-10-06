@@ -61,7 +61,7 @@ export function toolsFor(lang: Lang) {
       name: "cam_set_selection",
       title: say(lang, "tool.select.title"),
       description: say(lang, "tool.select.description"),
-      inputSchema: { type: "object", properties: { ...shared, uncheck: { type: "array", items: { type: "string" } }, check: { type: "array", items: { type: "string" } }, checkAll: { type: "boolean" } } },
+      inputSchema: { type: "object", properties: { ...shared, uncheck: { type: "array", items: { type: "string" } }, check: { type: "array", items: { type: "string" } }, checkAll: { type: "boolean" }, auto: { type: "boolean" }, mode: { type: "string", enum: ["manual", "auto"] } } },
       _meta: APP_ONLY,
     },
     {
@@ -176,7 +176,7 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
   }
   if (name === "cam_set_selection") {
     if (fromModel(meta)) throw new Error(say(lang, "call.modelSelect"));
-    const state = applySelection(threadId, { uncheck: args.uncheck, check: args.check, checkAll: args.checkAll }, options);
+    const state = applySelection(threadId, { uncheck: args.uncheck, check: args.check, checkAll: args.checkAll, auto: typeof args.auto === "boolean" ? args.auto : undefined, mode: args.mode === "auto" ? "auto" : "manual" }, options);
     return { content: [{ type: "text", text: summary(lang, state) }], structuredContent: panel(state) };
   }
   if (name === "cam_bind") {

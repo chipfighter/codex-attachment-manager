@@ -4,13 +4,15 @@
 // the last full request as a size baseline, which images it carried, and whether the engine could not rewrite it.
 // v0.1-9 — the task's name for the title (thread-names.ts). v0.1-13 — whether part of the history could not be found.
 // v0.2 — each image's source, which the panel filters by.
+// v0.3 — automatic selection: the switch, the checkboxes meaning "pinned" while it is on (kept apart from the manual
+// checks), and the images the model fetched in the latest turn.
 // Input: thread id, the sessions directory (rollouts are only read) and the tool's data directory.
 // Output: PanelState as plain JSON; selection changes are written to <data dir>/selection/.
 
 import type { ImageSource } from "./images.ts";
 import { dataDir, requestStatsDirOf, selectionDirOf } from "./paths.ts";
 import { readRequestStats, type RequestStats } from "./request-stats.ts";
-import { effectiveSelection, writeSelection } from "./selection.ts";
+import { effectiveSelection, writeSelection, type Mark, type Selection } from "./selection.ts";
 import { buildIndex, imageData, readThreadHistory, type IndexedImage, type ThreadIndex } from "./thread-index.ts";
 import { threadTitle } from "./thread-names.ts";
 import { pngThumbnail } from "./thumbnail.ts";
@@ -22,7 +24,9 @@ export type PanelImage = {
   // v0.2 — what the panel filters by; a PDF comment screenshot also says its page and the PDF's name when known.
   source: ImageSource; pdfPage: number | null; pdfName: string | null;
   width: number | null; height: number | null; bytes: number; base64Chars: number;
-  sameAs: string[]; checked: boolean; replaceable: boolean; requested: boolean;
+  // checked: the box is ticked: sent with automatic selection off, pinned with it on (v0.3). fetched: the model fetched
+  // it in the latest turn.
+  sameAs: string[]; checked: boolean; replaceable: boolean; requested: boolean; fetched: boolean;
   // Whether the last full request carried it (null: no such request recorded yet), and whether the next one will
   // (carried last time, or added since; images compacted out of the history will not come back).
   inLastRequest: boolean | null; inNextRequest: boolean;
@@ -38,8 +42,10 @@ export type SendInfo = {
 // Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
 // historyMissing: an earlier part of the history is gone for good (e.g. the task a fork came from was deleted), so the
 // images in it are not listed (v0.1-13).
+// auto: automatic selection is on (v0.3); fetched: the ids the model fetched in the latest turn.
 export type PanelState = {
   threadId: string; title: string | null; started: boolean; historyMissing: boolean; turns: number; images: PanelImage[]; requested: string[];
+  auto: boolean; fetched: string[];
   totals: { images: number; unchecked: number; checkedBytes: number; allBytes: number };
   send: SendInfo;
 };
@@ -121,8 +127,10 @@ export function sameContent(index: ThreadIndex, image: IndexedImage): string[] {
     .map((other) => other.id);
 }
 
-export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, stats: RequestStats | null, title: string | null = null): PanelState {
+// `unchecked`: the keys whose box is not ticked (v0.3: with automatic selection on, every image not pinned).
+export function panelState(threadId: string, history: Record_[], index: ThreadIndex, unchecked: Set<string>, stats: RequestStats | null, title: string | null = null, auto = false): PanelState {
   const requested = requestedIds(history);
+  const fetched = [...new Set([...index.copies.values()].filter((copy) => copy.turn !== null && copy.turn === index.turns).map((copy) => copy.of))];
   const carried: Record<string, number> | null = stats?.lastHttp?.imageSizes ?? null;
   // Images after the last one that request carried, or from a later turn, were added since and go out next time.
   const lastCarried = carried ? index.images.reduce((last, image, position) => (image.key in carried ? position : last), -1) : -1;
@@ -137,12 +145,13 @@ export function panelState(threadId: string, history: Record_[], index: ThreadIn
       checked: !unchecked.has(image.key),
       replaceable: image.replaceable,
       requested: requested.includes(image.id),
+      fetched: fetched.includes(image.id),
       inLastRequest: inLast,
       inNextRequest: inLast !== false || position > lastCarried || (lastTurn !== null && image.turn !== null && image.turn > lastTurn),
     };
   });
   return {
-    threadId, title, started: history.length > 0, historyMissing: false, turns: index.turns, images, requested,
+    threadId, title, started: history.length > 0, historyMissing: false, turns: index.turns, images, requested, auto, fetched,
     totals: {
       images: images.length,
       unchecked: images.filter((image) => !image.checked).length,
@@ -175,29 +184,47 @@ function load(threadId: string, options: PanelOptions) {
   return { root, history, index, selection, stats, title, historyMissing: missing.length > 0 };
 }
 
-export function loadPanelState(threadId: string, options: PanelOptions): PanelState {
-  const { history, index, selection, stats, title, historyMissing } = load(threadId, options);
-  return { ...panelState(threadId, history, index, new Set(Object.keys(selection.unchecked)), stats, title), historyMissing };
+// The keys whose box is not ticked: the unchecked ones; v0.3: with automatic selection on, every image that can be left
+// out and is not pinned.
+function offKeys(index: ThreadIndex, selection: Selection): Set<string> {
+  if (!selection.auto) return new Set(Object.keys(selection.unchecked));
+  const pinned = selection.pinned ?? {};
+  return new Set(index.images.filter((image) => image.replaceable && !pinned[image.key]).map((image) => image.key));
 }
 
-export function applySelection(threadId: string, change: { uncheck?: string[]; check?: string[]; checkAll?: boolean }, options: PanelOptions): PanelState {
+export function loadPanelState(threadId: string, options: PanelOptions): PanelState {
+  const { history, index, selection, stats, title, historyMissing } = load(threadId, options);
+  return { ...panelState(threadId, history, index, offKeys(index, selection), stats, title, !!selection.auto), historyMissing };
+}
+
+// v0.3: `auto` switches automatic selection; with `mode: "auto"` a tick pins an image instead of sending it, each kept
+// in its own record, so switching back finds the manual checks as they were.
+export function applySelection(threadId: string, change: { uncheck?: string[]; check?: string[]; checkAll?: boolean; auto?: boolean; mode?: "manual" | "auto" }, options: PanelOptions): PanelState {
   const { root, history, index, selection, stats, title, historyMissing } = load(threadId, options);
-  const unchecked = change.checkAll ? {} : { ...selection.unchecked };
+  const now = new Date().toISOString();
+  let next: Selection = { ...selection, threadId };
+  // Switched on for the first time, the thread is marked: from then on its history may hold copies the model fetched.
+  if (typeof change.auto === "boolean" && change.auto !== !!selection.auto) next = { ...next, auto: change.auto, autoAt: now, autoSince: selection.autoSince ?? now };
+  const pins = change.mode === "auto";
+  const marks: Record<string, Mark> = pins ? { ...(next.pinned ?? {}) } : change.checkAll ? {} : { ...next.unchecked };
   const byId = new Map(index.images.map((image) => [image.id, image]));
-  for (const id of change.uncheck ?? []) {
+  const imageOf = (id: string) => {
     const image = byId.get(id);
     if (!image) throw new Error(`${id} is not an image of this thread`);
+    return image;
+  };
+  for (const id of change.uncheck ?? []) {
+    const image = imageOf(id);
     if (!image.replaceable) throw new Error(`${id} cannot be unchecked (hosted image generation result)`);
-    unchecked[image.key] = { id, at: new Date().toISOString() };
+    if (pins) delete marks[image.key]; else marks[image.key] = { id, at: now };
   }
   for (const id of change.check ?? []) {
-    const image = byId.get(id);
-    if (!image) throw new Error(`${id} is not an image of this thread`);
-    delete unchecked[image.key];
+    const image = imageOf(id);
+    if (pins) marks[image.key] = { id, at: now }; else delete marks[image.key];
   }
-  // The rest (v0.3: automatic selection's switch and pins) stays as it was.
-  writeSelection({ ...selection, threadId, unchecked }, selectionDirOf(root));
-  return { ...panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats, title), historyMissing };
+  next = pins ? { ...next, pinned: marks } : { ...next, unchecked: marks };
+  writeSelection(next, selectionDirOf(root));
+  return { ...panelState(threadId, history, index, offKeys(index, next), stats, title, !!next.auto), historyMissing };
 }
 
 // One image for the panel: a PNG larger than maxSide is scaled down; smaller PNGs and other formats (which the
