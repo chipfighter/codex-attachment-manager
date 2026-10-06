@@ -20,7 +20,7 @@ Codex Attachment Manager（上下文素材管理器）：让用户逐轮决定�
 - 先在 Windows 上开发和测试。技术栈用 TypeScript/Node。
 - 界面开发：Claude 自己截图检查效果；做到界面的关键节点时，截图给用户看，停下来等反馈再继续（用户 2026-09-24 确认）。
 - 测试时调用模型一律用 `gpt-6-sol`，推理强度 `low`，包括脚本自测和桌面版测试，为了省 token（用户 2026-09-24 要求）。
-- 界面和提示文字分简体中文、英文两份：面板的在 `plugin/src/panel.html` 的文字表里，插件服务和命令行的在 `plugin/src/messages.ts`。新增或修改文字时两份一起改，单元测试会检查条目一一对应。改发给模型的占位符和说明（`plugin/src/rewrite.ts`）时，中文、英文（`--lang en`）各跑一次 `spike/src/v01-placeholder-selftest.ts`（用户 2026-09-25 要求）和 `spike/src/v01-needs-selftest.ts`（没有名字的工具截图全部取消后，模型能不能按编号要图、面板能不能认出来；用户 2026-09-26 要求），而且三个 GPT-6 模型都要跑：`gpt-6-sol`、`gpt-6-luna`、`gpt-6-astra`，推理强度 low，用环境变量 `CAM_TEST_MODEL` 切换（用户 2026-09-28 要求）。自测在用户的 Codex 里建的任务，测完由脚本自动归档，不留给用户手动整理（用户 2026-09-28 要求）；遗留的可以用 `spike/scripts/archive-test-threads.ts` 归档。
+- 界面和提示文字分简体中文、英文两份：面板的在 `plugin/src/panel.html` 的文字表里，插件服务和命令行的在 `plugin/src/messages.ts`。新增或修改文字时两份一起改，单元测试会检查条目一一对应。改发给模型的占位符和说明（`plugin/src/rewrite.ts`）时，中文、英文（`--lang en`）各跑一次 `spike/src/v01-placeholder-selftest.ts`（用户 2026-09-25 要求）和 `spike/src/v01-needs-selftest.ts`（没有名字的工具截图全部取消后，模型能不能按编号要图、面板能不能认出来；用户 2026-09-26 要求）；改的是自动选图的文字（自动版的占位符和说明、`cam_view_image` 的说明和返回的文字）时，再跑 `spike/src/v03-auto-selftest.ts`（模型该取图时会不会取、不该取时会不会不取；用户 2026-10-06 要求）。这些自测三个 GPT-6 模型都要跑：`gpt-6-sol`、`gpt-6-luna`、`gpt-6-astra`，推理强度 low，用环境变量 `CAM_TEST_MODEL` 切换（用户 2026-09-28 要求）。自测在用户的 Codex 里建的任务，测完由脚本自动归档，不留给用户手动整理（用户 2026-09-28 要求）；遗留的可以用 `spike/scripts/archive-test-threads.ts` 归档。
 - 分工：Claude 维护 `docs/` 下的规格和方案，并负责开发和测试（阶段 0 的 T0–T2 由 Codex 完成；测试需要在 Codex 之外启动 app-server，所以从 T3 起改由 Claude 执行）。其他协作者不修改 spec.md 和 design.md。
 
 ## Git 规范
