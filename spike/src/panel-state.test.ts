@@ -11,6 +11,7 @@ import { decodePng } from "../../plugin/src/png.ts";
 import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "../../plugin/src/panel-state.ts";
 import { requestStatsDirOf } from "../../plugin/src/paths.ts";
 import { recordRequest } from "../../plugin/src/request-stats.ts";
+import { readSelection, writeSelection } from "../../plugin/src/selection.ts";
 import { assistant, line, red, sampleSessions, THREAD, turn, upload } from "./testfixtures.ts";
 import { shrink } from "../../plugin/src/thumbnail.ts";
 import { png } from "./testkit.ts";
@@ -127,6 +128,17 @@ test("check and uncheck are kept per thread and validated", () => {
   state = applySelection(THREAD, { checkAll: true }, options);
   assert.equal(state.totals.unchecked, 0);
   assert.throws(() => applySelection(THREAD, { uncheck: ["IMG-099"] }, options), /not an image of this thread/);
+});
+
+test("checking and unchecking keep automatic selection's switch and pins (v0.3)", () => {
+  const options = sampleSessions();
+  const dir = join(options.dataRoot, "selection");
+  const auto = { auto: true, autoAt: "2026-10-06T10:00:00Z", autoSince: "2026-10-06T10:00:00Z", pinned: { "msg_1#1": { id: "IMG-002", at: "2026-10-06T10:00:00Z" } } };
+  writeSelection({ threadId: THREAD, unchecked: {}, ...auto }, dir);
+  applySelection(THREAD, { uncheck: ["IMG-001"] }, options);
+  const { unchecked, ...rest } = readSelection(THREAD, dir);
+  assert.deepEqual(Object.values(unchecked).map((entry) => entry.id), ["IMG-001"]);
+  assert.deepEqual(rest, { threadId: THREAD, ...auto });
 });
 
 test("thumbnails keep the aspect ratio and fit the requested size", () => {

@@ -1,12 +1,13 @@
 // Purpose: P2 — the rewrite rules: only unchecked images change; duplicate vs plain placeholders; locked results.
 // v0.1 — one developer message explains omitted images, so the model does not take back earlier answers.
 // v0.1-25 — once anything is left out, each image still sent is marked with its id.
+// v0.3 — automatic selection: its wording, placeholders that stay put while the model fetches, pins, and copies.
 // Input: synthetic request items; output: Node test assertions only.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { findImages, type ImageRef } from "../../plugin/src/images.ts";
-import { OMISSION_NOTE, omissionNote, rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
+import { autoNote, autoPlaceholder, fetchedLabel, OMISSION_NOTE, omissionNote, rewriteItems, type Described } from "../../plugin/src/rewrite.ts";
 import { png } from "./testkit.ts";
 
 const url = (bytes: Buffer) => `data:image/png;base64,${bytes.toString("base64")}`;
@@ -178,4 +179,91 @@ test("a PDF comment screenshot is replaced like an upload, and Codex's caption b
     caption,
     "[图片 IMG-001 已省略｜未命名｜用户上传｜第 1 轮｜4×4]\n原图被用户省略以节省上下文，情况见前面的“上下文管理说明”；需要重新看这张图时，在回复里写出“需要 IMG-001”。",
   ]);
+});
+
+// v0.3 (user 2026-10-06): automatic selection. Turn 1 brings IMG-001 a.png (red), IMG-002 b.png and IMG-003 b copy.png
+// (both blue); turn 2 brings IMG-004 c.png (green), then the model fetches IMG-001 with cam_view_image: a copy, which
+// the thread index keeps apart without an id of its own.
+const FETCHED = "[图片 IMG-001 取回的原图｜a.png｜用户上传｜第 1 轮｜4×4]";
+const COPY_GONE = "[IMG-001 的原图：模型当时用 cam_view_image 取回，只在那一轮提供，现在已省略]";
+const fetchCall = { type: "custom_tool_call", call_id: "c2", name: "exec", input: 'const r = await tools.mcp__codex_attachment_manager__cam_view_image({ids:["IMG-001"]}); for (const c of r.content) c.type === "image" ? image(c) : text(c.text);' };
+const fetchOutput = (label = FETCHED) => ({ type: "custom_tool_call_output", id: "ctco_2", call_id: "c2", output: [{ type: "input_text", text: "Script completed" }, { type: "input_text", text: label }, { type: "input_image", image_url: url(red) }] });
+const autoItems = (fetched = true) => [
+  { type: "message", id: "msg_dev", role: "developer", content: [{ type: "input_text", text: "instructions" }] },
+  { type: "message", id: "msg_1", role: "user", content: [{ type: "input_text", text: "三张图" }, ...tagged("a.png", 1, red), ...tagged("b.png", 2, blue), ...tagged("b copy.png", 3, blue)] },
+  { type: "message", id: "msg_2", role: "assistant", content: [{ type: "output_text", text: "收到" }] },
+  { type: "message", id: "msg_3", role: "user", content: [{ type: "input_text", text: "这张呢" }, ...tagged("c.png", 1, green)] },
+  ...(fetched ? [fetchCall, fetchOutput()] : []),
+];
+function autoIndex(list: Array<Record<string, any>>) {
+  const refs = findImages(list);
+  const byKey = new Map<string, Described>();
+  for (const ref of refs.filter((candidate) => !candidate.fetchedId)) byKey.set(ref.key, { id: `IMG-00${byKey.size + 1}`, name: ref.name, label: ref.label, kind: ref.kind, turn: ref.item <= 2 ? 1 : 2, width: ref.width, height: ref.height });
+  return {
+    describe: (ref: ImageRef) => byKey.get(ref.key),
+    keys: (...ids: string[]) => new Set(ids.map((id) => [...byKey].find(([, v]) => v.id === id)![0])),
+    copyKey: refs.find((ref) => ref.fetchedId)?.key ?? null,
+  };
+}
+
+test("the line cam_view_image writes before an image names the id it copies, in a tool output only", () => {
+  assert.deepEqual(findImages(autoItems()).map((ref) => ref.fetchedId), [null, null, null, null, "IMG-001"]);
+  const english = [fetchCall, fetchOutput("[Image IMG-001 fetched original | a.png | uploaded by the user | turn 1 | 4×4]")];
+  assert.deepEqual(findImages(english).map((ref) => ref.fetchedId), ["IMG-001"]);
+  const typed = [{ type: "message", id: "msg_x", role: "user", content: [{ type: "input_text", text: FETCHED }, { type: "input_image", image_url: url(red) }] }];
+  assert.deepEqual(findImages(typed).map((ref) => ref.fetchedId), [null], "the same words typed by the user do not count");
+  assert.equal(fetchedLabel({ id: "IMG-001", name: "a.png", label: "[Image #1]", kind: "upload", turn: 1, width: 4, height: 4 }), FETCHED, "without Codex's own label");
+});
+
+test("automatic selection: earlier turns become placeholders in its own wording, under its own note", () => {
+  const input = autoItems();
+  const { describe, keys } = autoIndex(input);
+  const { items: out, report } = rewriteItems(input, describe, keys("IMG-001", "IMG-002", "IMG-003"), noPixels, { auto: { currentTurn: 2 } });
+  assert.deepEqual(out[1], { type: "message", role: "developer", content: [{ type: "input_text", text: autoNote("zh") }] });
+  assert.equal(report.noteAt, 1);
+  const parts = texts(out[2]);
+  assert.equal(parts[1], autoPlaceholder({ id: "IMG-001", name: "a.png", label: "[Image #1]", kind: "upload", turn: 1, width: 4, height: 4 }));
+  assert.match(parts[1], /^\[图片 IMG-001（\[Image #1\]） 已省略｜a\.png｜用户上传｜第 1 轮｜4×4\]\n.*自动选图.*调用 cam_view_image 工具，传入“IMG-001”/s);
+  // The copy fetched this turn is sent, yet IMG-001's placeholder does not point to it: it stays as it was before the fetch.
+  assert.deepEqual(modes(report), [["IMG-001", "plain", null], ["IMG-002", "plain", null], ["IMG-003", "plain", null]]);
+  assert.equal(out[4], input[3], "this turn's new image goes as it is, without a label");
+  assert.equal(out[6], input[5], "and so does the copy");
+});
+
+test("automatic selection: the requests of a turn keep everything before the fetched copy the same", () => {
+  const { describe, keys } = autoIndex(autoItems());
+  const left = keys("IMG-001", "IMG-002", "IMG-003");
+  const before = rewriteItems(autoItems(false), describe, left, noPixels, { auto: { currentTurn: 2 } }).items;
+  const after = rewriteItems(autoItems(), describe, left, noPixels, { auto: { currentTurn: 2 } }).items;
+  assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+});
+
+test("automatic selection: a pinned image stays with its id, and an omitted identical one points to it", () => {
+  const input = autoItems();
+  const { describe, keys } = autoIndex(input);
+  const { items: out, report } = rewriteItems(input, describe, keys("IMG-001", "IMG-003"), noPixels, { auto: { currentTurn: 2 } });
+  assert.equal(texts(out[2])[2], "[图片 IMG-002（[Image #2]） 已提供｜b.png｜用户上传｜第 1 轮｜4×4]");
+  assert.deepEqual(modes(report), [["IMG-001", "plain", null], ["IMG-003", "duplicate", "IMG-002"]]);
+});
+
+test("a copy fetched in an earlier turn is left out, with automatic selection on or off", () => {
+  const input = autoItems();
+  const { describe, keys, copyKey } = autoIndex(input);
+  const copies = new Map([[copyKey!, "IMG-001"]]);
+  const manual = rewriteItems(input, describe, new Set(), noPixels, { copies });
+  assert.deepEqual(texts(manual.items[5]), ["Script completed", FETCHED, COPY_GONE]);
+  assert.deepEqual([manual.report.copies, manual.report.replaced.length, manual.report.noteAt], [["IMG-001"], 0, undefined]);
+  const auto = rewriteItems(input, describe, keys("IMG-001", "IMG-002", "IMG-003", "IMG-004"), noPixels, { copies, auto: { currentTurn: 3 } });
+  assert.equal(texts(auto.items[6])[2], COPY_GONE);
+  assert.deepEqual(modes(auto.report).map(([id]) => id), ["IMG-001", "IMG-002", "IMG-003", "IMG-004"]);
+  const english = rewriteItems(input, describe, new Set(), noPixels, { lang: "en", copies });
+  assert.equal(texts(english.items[5])[2], "[Original of IMG-001: fetched by the model with cam_view_image, included only in that turn, now omitted]");
+});
+
+test("the note for automatic selection keeps what stops retractions and guesses, and says how to fetch", () => {
+  const rules = {
+    zh: [/开着“自动选图”/, /真实存在，你当时收到并看过/, /不要因为现在看不到，就认为之前的回答是猜测或错误/, /调用 cam_view_image 工具，传入它的编号/, /之前说过的内容够用时，不要调用/, /只在本轮提供/, /不要说看不到/],
+    en: [/automatic image selection on/, /really existed in the turn where they appeared/, /Do not treat your earlier answers as guesses or mistakes/, /call the cam_view_image tool with its id/, /When what you said before is enough, do not call it/, /included only in this turn/, /do not say you cannot see it/],
+  };
+  for (const lang of ["zh", "en"] as const) for (const rule of rules[lang]) assert.match(autoNote(lang), rule, `${lang}: ${rule}`);
 });

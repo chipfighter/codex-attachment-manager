@@ -195,7 +195,8 @@ export function applySelection(threadId: string, change: { uncheck?: string[]; c
     if (!image) throw new Error(`${id} is not an image of this thread`);
     delete unchecked[image.key];
   }
-  writeSelection({ threadId, unchecked }, selectionDirOf(root));
+  // The rest (v0.3: automatic selection's switch and pins) stays as it was.
+  writeSelection({ ...selection, threadId, unchecked }, selectionDirOf(root));
   return { ...panelState(threadId, history, index, new Set(Object.keys(unchecked)), stats, title), historyMissing };
 }
 

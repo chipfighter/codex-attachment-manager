@@ -9,6 +9,7 @@
 // v0.1-12 — archived tasks (<CODEX_HOME>/archived_sessions) are looked up too: a fork's history may start in a page of
 // a task the user has archived since. v0.1-13 — if that page is gone for good (its task deleted), the rest is read and
 // the gap reported, instead of failing.
+// v0.3 — an image the model fetched with our tool (cam_view_image) is kept apart as a copy of the original: no id.
 // Input: the sessions directory and a thread id. Output: ThreadIndex (in memory; files are parsed incrementally).
 
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
@@ -19,7 +20,9 @@ import { decodePng } from "./png.ts";
 
 type Json = Record<string, any>;
 export type IndexedImage = ImageRef & { id: string; turn: number | null; bytes: number; pixelSha256: string | null };
-export type ThreadIndex = { threadId: string; images: IndexedImage[]; byKey: Map<string, IndexedImage>; turns: number; turnNumbers: Map<string, number> };
+// v0.3: an image the model fetched with our tool, a copy of `of` sent in its own turn only (spec: automatic selection).
+export type FetchedCopy = { key: string; of: string; turn: number | null };
+export type ThreadIndex = { threadId: string; images: IndexedImage[]; byKey: Map<string, IndexedImage>; turns: number; turnNumbers: Map<string, number>; copies: Map<string, FetchedCopy> };
 export type Parsed = { offset: number; type: string; payload: Json; timestamp: string | null };
 type FileCache = { size: number; mtimeMs: number; parsedTo: number; records: Parsed[] };
 
@@ -225,16 +228,20 @@ export function buildIndex(threadId: string, history: Parsed[]): ThreadIndex {
   }
   const images: IndexedImage[] = [];
   const byKey = new Map<string, IndexedImage>();
+  const copies = new Map<string, FetchedCopy>();
   for (const ref of findImages(items)) {
-    if (byKey.has(ref.key)) continue;
+    if (byKey.has(ref.key) || copies.has(ref.key)) continue;
     const turnId = ref.turnId ?? activeTurn[ref.item];
-    const entry: IndexedImage = {
-      ...ref,
-      id: `IMG-${String(images.length + 1).padStart(3, "0")}`,
-      turn: turnId ? turnNumbers.get(turnId) ?? null : null,
-      bytes: Math.floor((ref.base64Chars * 3) / 4),
-      pixelSha256: pixelHashOf(items, ref),
-    };
+    const turn = turnId ? turnNumbers.get(turnId) ?? null : null;
+    const pixelSha256 = pixelHashOf(items, ref);
+    // v0.3: what our fetch tool brought back is the same image again, not a new occurrence, so it takes no id (the ids
+    // after it stay as they were) and the panel lists it on the original's row. Its content must match that id's.
+    const original = ref.fetchedId ? images.find((image) => image.id === ref.fetchedId) : undefined;
+    if (original && (original.contentId === ref.contentId || (pixelSha256 !== null && original.pixelSha256 === pixelSha256))) {
+      copies.set(ref.key, { key: ref.key, of: original.id, turn });
+      continue;
+    }
+    const entry: IndexedImage = { ...ref, id: `IMG-${String(images.length + 1).padStart(3, "0")}`, turn, bytes: Math.floor((ref.base64Chars * 3) / 4), pixelSha256 };
     images.push(entry);
     byKey.set(ref.key, entry);
   }
@@ -244,7 +251,7 @@ export function buildIndex(threadId: string, history: Parsed[]): ThreadIndex {
     const twin = images.find((other) => other.name && (other.contentId === entry.contentId || (entry.pixelSha256 !== null && other.pixelSha256 === entry.pixelSha256)));
     if (twin) entry.name = twin.name;
   }
-  return { threadId, images, byKey, turns: turnNumbers.size, turnNumbers };
+  return { threadId, images, byKey, turns: turnNumbers.size, turnNumbers, copies };
 }
 
 // The first line alone (session_meta can be long), read in chunks without parsing the rest of the file.

@@ -11,6 +11,9 @@
 // are logged with their duration; pixel fingerprints are shared with the engine through the data directory.
 // v0.1-14 — the panel reports Codex's interface language with its calls; it is remembered (language.ts), and the tool
 // list (the tab's title), results and refusals speak it (messages.ts). v0.1-20 — Codex's language setting counts too.
+// v0.3 — cam_view_image, the one tool for the model: in a thread with automatic selection on, it returns the originals
+// of images by id, each after a line naming it (rewrite.ts), so the index knows them as copies. Codex's code mode does
+// not list plugin tools to the model; the model learns its name from the context note and looks it up.
 // Input: MCP JSON-RPC over stdio. Env: CAM_ENGINE_PORT (default 17891), CAM_NO_ENGINE=1 (tests), CAM_DATA_DIR.
 // Output: tool results; <data dir>/plugin-server.jsonl (events and counts only, no conversation content).
 
@@ -26,9 +29,11 @@ import { currentLang, langOf, rememberLang, type Lang } from "./language.ts";
 import { say } from "./messages.ts";
 import { migrateDataOnce } from "./migrate-data.ts";
 import { applySelection, imageFor, loadPanelState, type PanelState } from "./panel-state.ts";
-import { dataDir, pixelCacheDirOf } from "./paths.ts";
+import { dataDir, pixelCacheDirOf, selectionDirOf } from "./paths.ts";
+import { fetchedLabel, fetchWords } from "./rewrite.ts";
+import { effectiveSelection } from "./selection.ts";
 import { connectDirectly, useEngine, usesEngine } from "./setup.ts";
-import { hasRollout, readThreadHistory, sessionMetaOf, setPixelCache } from "./thread-index.ts";
+import { hasRollout, loadThreadIndex, readThreadHistory, sessionMetaOf, setPixelCache } from "./thread-index.ts";
 import { threadTitle } from "./thread-names.ts";
 
 type Json = Record<string, any>;
@@ -79,6 +84,14 @@ export function toolsFor(lang: Lang) {
       description: say(lang, "tool.bind.description"),
       inputSchema: { type: "object", properties: { ...shared, target: { type: "string" } }, required: ["target"] },
       _meta: APP_ONLY,
+    },
+    // For the model (no app-only visibility); its words are text for the model, so they live in rewrite.ts.
+    {
+      name: "cam_view_image",
+      title: fetchWords(lang).title,
+      description: fetchWords(lang).description,
+      inputSchema: { type: "object", properties: { ids: { type: "array", items: { type: "string" }, description: fetchWords(lang).ids } }, required: ["ids"] },
+      annotations: { readOnlyHint: true },
     },
   ];
 }
@@ -183,6 +196,30 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
     try { plan = args.enable === true ? useEngine(enginePort) : connectDirectly(); } catch (error) { throw localized(error, lang); }
     const state = loadPanelState(threadId, options);
     return { content: [{ type: "text", text: say(lang, args.enable === true ? "call.enabled" : "call.disabled") }], structuredContent: panel(state, { notes: plan.notes }) };
+  }
+  if (name === "cam_view_image") {
+    const words = fetchWords(lang);
+    const ids: string[] = Array.isArray(args.ids) ? args.ids.map(String) : typeof args.id === "string" ? [args.id] : [];
+    // Only where the user switched automatic selection on; otherwise images come back only when the user checks them.
+    if (!effectiveSelection(threadId, sessionsDir, selectionDirOf(dataDir())).auto) {
+      log({ event: "fetch", threadId, ids, refused: "automatic selection is off" });
+      return { content: [{ type: "text", text: words.off }], isError: true };
+    }
+    const index = loadThreadIndex(sessionsDir, threadId);
+    const content: Json[] = [];
+    const found: string[] = [];
+    for (const asked of ids) {
+      const id = asked.trim().toUpperCase();
+      const image = index.images.find((candidate) => candidate.id === id);
+      if (!image) { content.push({ type: "text", text: words.missing(asked) }); continue; }
+      const { dataUrl } = imageFor(threadId, id, Number.MAX_SAFE_INTEGER, options);
+      const parts = dataUrl ? /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl) : null;
+      if (!parts) { content.push({ type: "text", text: words.unavailable(id) }); continue; }
+      content.push({ type: "text", text: fetchedLabel(image, lang) }, { type: "image", data: parts[2], mimeType: parts[1] });
+      found.push(id);
+    }
+    log({ event: "fetch", threadId, ids, found });
+    return { content, isError: ids.length > 0 && !found.length };
   }
   if (name === "cam_image") {
     const image = imageFor(threadId, String(args.id), Number(args.maxSide ?? 160), options);
