@@ -34,6 +34,7 @@ So I wanted to keep the long conversation going and decide, turn by turn, which 
 - **Duplicates handled**: when an identical image is still being sent, the placeholder points to it.
 - **The model knows why**: a note tells the model the images were left out by you to save context, so its earlier answers still stand and it doesn't make up details it can't see.
 - **The model asks, you decide**: when it needs an image, it replies `need IMG-xxx`. The panel lists what it asked for and jumps to it in one click. A checked image goes back to its place in the conversation, marked with its ID.
+- **Or let the model pick** (new in 0.3): switch on *Auto-select* at the bottom of the panel, per task. Images from earlier turns are then left out by default, and the model fetches the ones it needs by ID, for that turn only. Images you check are pinned and go every turn. The panel shows what the model fetched in the latest turn.
 - **See the savings**: the panel estimates the size of the next request and how much you save compared with sending every image, and warns you when a request could not be rewritten.
 - **English and Simplified Chinese**: the panel, the tab name and the note for the model follow Codex's language.
 - **Stays on your machine**: the plugin sends nothing anywhere besides the requests Codex already makes to OpenAI.
@@ -41,7 +42,8 @@ So I wanted to keep the long conversation going and decide, turn by turn, which 
 ## How it works
 
 - The plugin runs a small local proxy, the engine, between Codex and OpenAI. Before a request goes out, the engine swaps unchecked images for placeholders and adds the note; everything else is forwarded as is.
-- Selections are saved per task. Only you can change them, not the model.
+- With Auto-select on, the engine does the same for the images of earlier turns you haven't pinned, and the plugin gives the model one tool, `cam_view_image`, to fetch an image back into the current turn. The placeholders before it stay as they were, so the cached part of the request isn't broken.
+- Selections and the Auto-select switch are saved per task. Only you can change them; the model can only fetch an image for one turn, and only with Auto-select on.
 - The panel is an MCP app you open from the side panel. It doesn't go through the model and costs no tokens.
 
 ## Requirements
@@ -87,6 +89,7 @@ The command installs the plugin with Codex's own CLI and sets up the proxy. Rest
 2. Uncheck the images you don't want to send anymore. Each change is saved at once and applies from the next message.
 3. When the model replies `need IMG-xxx` for an unchecked image, a bar at the top of the panel lists it. Click the ID to jump to the image and check it.
 4. With many images, click the filter button next to refresh and pick the sources to show. A turn's checkbox then covers only the images shown.
+5. To let the model pick, switch on **Auto-select** at the bottom of the panel. Check the images that should go every turn, such as a reference image; the model fetches the others when it needs them. Switch it off to get your own checks back.
 
 ## Uninstall
 
@@ -114,6 +117,7 @@ Your selections and logs stay in the data folder (see [Privacy](#privacy)); dele
 
 - Only images are managed, because they are the only files that reach the model as they are. Codex doesn't send PDFs or videos themselves, only text the model extracts from them or images it makes of them, and those images are listed like any other. Audio waits for a Codex model that accepts it: until then, Codex replaces audio with a short note before sending.
 - Results of Codex's built-in image generation can't be unchecked.
+- With Auto-select on, each image the model fetches adds a request to that turn. Smaller models may misread small details in an image they fetched: in our tests GPT-6 Luna at low effort sometimes did, as it does with images opened with Codex's own image viewer, while GPT-6 Sol and Astra read them right. Pin an image whose details matter, or use a larger model.
 - If you uncheck an image while a turn is still running over WebSocket, the rest of that turn still carries the original. The panel tells you; the change applies from the next message.
 - Enabling, disabling and upgrading take effect after you restart Codex.
 - After you switch Codex's language, the panel changes right away and the note for the model changes from the next message, but the tab name in the side panel changes only after a restart.
@@ -132,7 +136,7 @@ Your selections and logs stay in the data folder (see [Privacy](#privacy)); dele
 - Install from source into your Codex: quit Codex, run `cam install` in the repository (`./cam install` on macOS and Linux), then start Codex. `cam status` shows the installation, `cam uninstall` removes it.
 - Run the tests with Node 24 or later: `cd spike && node --test`. CI runs them on Windows, macOS and Linux, then installs the plugin with Codex's CLI and runs the install and uninstall scripts.
 - Work on the panel without Codex: `node spike/scripts/panel-dev.ts`, then open `http://127.0.0.1:17895/?solo=1`. The page uses synthetic images and a temporary Codex folder, so your real data is never read or changed.
-- When you change the text the model sees (`plugin/src/rewrite.ts`), run the self-tests in `spike/src/v01-placeholder-selftest.ts` and `spike/src/v01-needs-selftest.ts`, in Chinese and with `--lang en`. They start their own engine and app-server, use your Codex account, and archive the test tasks they create.
+- When you change the text the model sees (`plugin/src/rewrite.ts`), run the self-tests in `spike/src/v01-placeholder-selftest.ts` and `spike/src/v01-needs-selftest.ts`, and for Auto-select's wording `spike/src/v03-auto-selftest.ts`, in Chinese and with `--lang en`. They start their own engine and app-server, use your Codex account, and archive the test tasks they create.
 - Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## License

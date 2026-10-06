@@ -8,7 +8,9 @@
 // with &newtask=1 the user then starts one task — the panel switches to it — and with &newtask=2 two at once;
 // ?thread=gap for a fork whose original task was deleted, v0.1-13; ?lang=en for Codex in English, v0.1-14;
 // ?thread=many for a task with 45 images whose last reply asks for two unchecked ones, v0.1-17;
-// ?demo=filter for the filter bar open with PDF pages picked, ?demo=filtered for the same folded away, v0.2).
+// ?demo=filter for the filter bar open with PDF pages picked, ?demo=filtered for the same folded away, v0.2;
+// ?thread=auto for the same task with automatic selection on, IMG-002 pinned and a last turn in which the model fetched
+// IMG-004 and IMG-007, v0.3).
 // The demo task has a name, as if the user had renamed it in Codex (v0.1-9). Its last two turns (v0.2) hold comments on
 // a PDF and on a web page, as Codex desktop attaches them, and an image a tool returned.
 // Everything is written to a temporary folder, including a Codex home of its own: nothing in the user's Codex home is
@@ -91,6 +93,19 @@ writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
     { type: "input_image", image_url: url(phonePage) },
   ]) + toolImage("c3", "image(await load('chart'));", chart) + say("需要 IMG-001 才能回答。", "t6"));
 
+// ?thread=auto (v0.3): the same history, then a turn in which the model fetched IMG-004 and IMG-007 with
+// cam_view_image (each image after the line naming it, as the plugin returns them).
+const AUTO = `${THREAD.slice(0, -4)}a070`;
+const sameHistory = readFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`), "utf8").split("\n").slice(1).join("\n");
+const fetchedBy = (callId: string, pairs: Array<[string, Buffer]>) =>
+  line("response_item", { type: "custom_tool_call", call_id: callId, name: "exec", input: `const r = await tools.mcp__codex_attachment_manager__cam_view_image({ids:${JSON.stringify(pairs.map(([label]) => /IMG-\d+/.exec(label)![0]))}}); for (const c of r.content) c.type === "image" ? image(c) : text(c.text);` }) +
+  line("response_item", { type: "custom_tool_call_output", id: `ctco_${callId}`, call_id: callId, output: [{ type: "input_text", text: "Script completed\nOutput:\n" }, ...pairs.flatMap(([label, bytes]) => [{ type: "input_text", text: label }, { type: "input_image", image_url: url(bytes) }])] });
+writeFileSync(join(day, `rollout-2026-09-24T10-30-00-${AUTO}.jsonl`),
+  line("session_meta", { id: AUTO }) + sameHistory +
+  turn("t7") + commented("msg_7", "t7", [{ type: "input_text", text: "按日落图和设置截图的风格，再出一版首页配色" }]) +
+  fetchedBy("c7", [["[图片 IMG-004 取回的原图｜sunset.png｜生成的图片｜第 2 轮｜768×512]", sunset], ["[图片 IMG-007 取回的原图｜settings-screenshot.png｜用户上传｜第 4 轮｜1280×720]", screenshot]]) +
+  say("新的一版配色在这里：主色沿用日落的橙黄，按钮用设置页的深灰。", "t7"));
+
 // ?thread=gap: a fork whose history starts in a page of a task that was deleted since.
 const GAP = `${THREAD.slice(0, -4)}0a90`;
 writeFileSync(join(day, `rollout-2026-09-24T11-00-00-${GAP}.jsonl`),
@@ -124,6 +139,7 @@ writeFileSync(join(day, `rollout-2026-09-24T12-00-00-${MANY}.jsonl`), manyLog);
 // Their names, as Codex keeps them next to the sessions folder (the panel's title).
 writeFileSync(join(root, "session_index.jsonl"), `${JSON.stringify({ id: THREAD, thread_name: "海报配色调整", updated_at: "2026-09-24T10:00:00Z" })}
 ${JSON.stringify({ id: MANY, thread_name: "产品图批量修图", updated_at: "2026-09-24T12:00:00Z" })}
+${JSON.stringify({ id: AUTO, thread_name: "海报配色调整", updated_at: "2026-09-24T10:30:00Z" })}
 `);
 
 // New tasks the user starts after opening the panel on a new chat (?newtask=): Codex files them in today's folder.
@@ -157,6 +173,10 @@ const meta = { threadId: THREAD, thread_id: THREAD };
 callTool("cam_set_selection", { uncheck: ["IMG-001", "IMG-005", "IMG-006"] }, meta, sessionsDir);
 const manyMeta = { threadId: MANY, thread_id: MANY };
 callTool("cam_set_selection", { uncheck: ["IMG-005", "IMG-012", "IMG-017", "IMG-024", "IMG-032", "IMG-040"] }, manyMeta, sessionsDir);
+// v0.3: automatic selection on, with IMG-002 pinned as a reference the user wants in every turn.
+const autoMeta = { threadId: AUTO, thread_id: AUTO };
+callTool("cam_set_selection", { auto: true }, autoMeta, sessionsDir);
+callTool("cam_set_selection", { check: ["IMG-002"], mode: "auto" }, autoMeta, sessionsDir);
 
 // What the engine would have recorded: the last full request came in turn 3 (turn 4's images are new since) and had
 // IMG-001, IMG-005 and IMG-006 replaced. ?stats=skipped|websocket|none shows the other cases.
@@ -173,6 +193,16 @@ function writeStats(kind: string): void {
   const at = new Date(Date.now() - 6 * 60_000).toISOString();
   recordRequest(THREAD, { at, transport: "http", turnId: "t3", decodedBytes: before, imageSizes: sizes, rewrite }, dir);
   if (kind === "websocket") recordRequest(THREAD, { at: new Date().toISOString(), transport: "websocket", event: "active-while-unchecked" }, dir);
+}
+
+// The auto task's last full request came in turn 7: the images of earlier turns were left out, all but IMG-002 (pinned)
+// and the hosted result; the two copies the model fetched went out with it.
+{
+  const items = readFileSync(join(day, `rollout-2026-09-24T10-30-00-${AUTO}.jsonl`), "utf8").trim().split("\n").map((raw) => JSON.parse(raw)).filter((record) => record.type === "response_item").map((record) => record.payload);
+  const sizes = imageSizesOf(items);
+  const before = Object.values(sizes).reduce((sum, chars) => sum + chars, 0) + 180_000;
+  const replaced = ["IMG-001", "IMG-003", "IMG-004", "IMG-005", "IMG-006", "IMG-007", "IMG-009", "IMG-010", "IMG-011", "IMG-012", "IMG-013"].map((id) => ({ id, mode: "plain" }));
+  recordRequest(AUTO, { at: new Date(Date.now() - 2 * 60_000).toISOString(), transport: "http", turnId: "t7", decodedBytes: before, imageSizes: sizes, rewrite: { auto: true, replaced, decodedBefore: before, decodedAfter: Math.round(before * 0.14) } }, requestStatsDirOf(process.env.CAM_DATA_DIR));
 }
 
 // ---- the host page: a stand-in for Codex's side panel ----
@@ -210,7 +240,7 @@ const HOST = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><tit
   // ?thread=fresh: a thread that has no rollout, like a panel opened on a new chat whose prepared thread was replaced.
   // Each page load gets a thread of its own, so a switch made on an earlier load does not carry over.
   const fresh = params.get("thread") === "fresh" ? Math.random().toString(16).slice(2, 6).padEnd(4, "0") : null;
-  const query = fresh ? "?fresh=" + fresh : params.get("thread") === "gap" ? "?gap=1" : params.get("thread") === "many" ? "?many=1" : "";
+  const query = fresh ? "?fresh=" + fresh : params.get("thread") === "gap" ? "?gap=1" : params.get("thread") === "many" ? "?many=1" : params.get("thread") === "auto" ? "?auto=1" : "";
   const call = (name, args) => fetch("/call" + query, { method: "POST", body: JSON.stringify({ name, arguments: args }) }).then((r) => r.json());
   window.addEventListener("message", async (event) => {
     const m = event.data;
@@ -276,7 +306,8 @@ createServer((request, response) => {
       const freshId = `${THREAD.slice(0, -4)}${fresh}`;
       const gap = new URL(request.url, "http://x").searchParams.has("gap");
       const many = new URL(request.url, "http://x").searchParams.has("many");
-      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : gap ? { threadId: GAP, thread_id: GAP } : many ? manyMeta : meta;
+      const auto = new URL(request.url, "http://x").searchParams.has("auto");
+      const threadMeta = fresh && /^[0-9a-f]{4}$/.test(fresh) ? { threadId: freshId, thread_id: freshId } : gap ? { threadId: GAP, thread_id: GAP } : many ? manyMeta : auto ? autoMeta : meta;
       try { reply(200, "application/json", JSON.stringify(callTool(name, args ?? {}, threadMeta, sessionsDir))); }
       catch (error) { reply(200, "application/json", JSON.stringify({ isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })); }
     });

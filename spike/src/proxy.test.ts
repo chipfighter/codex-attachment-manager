@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import zlib from "node:zlib";
-import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
+import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, needsRewrite, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { png } from "./testkit.ts";
 
@@ -126,4 +126,24 @@ test("rewriteBody forwards the original bytes when nothing applies or the body i
   const { body: out, report } = rewriteBody(risky, "zstd", threadId, sessions, selections);
   assert.equal(out, risky);
   assert.match(report.skipped, /2\^53/);
+});
+
+// v0.3: automatic selection. The request belongs to turn 2, which the rollout has not recorded yet.
+test("with automatic selection, rewriteBody leaves out earlier turns' images that are not pinned", () => {
+  const { threadId, sessions, selections, red, blue, body } = fixture();
+  assert.equal(needsRewrite(threadId, selections, sessions), false);
+  writeSelection({ threadId, unchecked: {}, auto: true, autoAt: "2026-10-06T10:00:00Z", autoSince: "2026-10-06T10:00:00Z", pinned: { "msg_1#1": { id: "IMG-002", at: "2026-10-06T10:00:00Z" } } }, selections);
+  assert.equal(needsRewrite(threadId, selections, sessions), true);
+  const json = JSON.parse(zlib.zstdDecompressSync(body()).toString("utf8"));
+  json.input.push({ type: "message", role: "user", content: [{ type: "input_text", text: "再看看" }] });
+  const original = zlib.zstdCompressSync(Buffer.from(JSON.stringify(json)));
+  const { body: out, report } = rewriteBody(original, "zstd", threadId, sessions, selections, "t2");
+  const text = zlib.zstdDecompressSync(out).toString("utf8");
+  assert.ok(!text.includes(red.slice(30)), "turn 1's IMG-001 is left out");
+  assert.ok(text.includes(blue.slice(30)), "the pinned IMG-002 is still sent");
+  assert.match(text, /\[图片 IMG-001（\[Image #1\]） 已省略｜a\.png｜用户上传｜第 1 轮｜64×64\]\\n之前各轮的图片默认省略/);
+  assert.match(text, /\[图片 IMG-002（\[Image #2\]） 已提供｜b\.png/);
+  assert.match(text, /上下文管理说明（来自用户安装的上下文素材管理工具）：这个任务开着“自动选图”/);
+  assert.deepEqual([report.auto, report.replaced.map((r: Record<string, unknown>) => [r.id, r.mode])], [true, [["IMG-001", "plain"]]]);
+  assert.equal(rewriteBody(original, "zstd", threadId, sessions, selections, "t1").body, original, "turn 1's own requests send its images");
 });

@@ -11,6 +11,7 @@ import { decodePng } from "../../plugin/src/png.ts";
 import { applySelection, imageFor, loadPanelState, requestedIds, sendInfo } from "../../plugin/src/panel-state.ts";
 import { requestStatsDirOf } from "../../plugin/src/paths.ts";
 import { recordRequest } from "../../plugin/src/request-stats.ts";
+import { readSelection, writeSelection } from "../../plugin/src/selection.ts";
 import { assistant, line, red, sampleSessions, THREAD, turn, upload } from "./testfixtures.ts";
 import { shrink } from "../../plugin/src/thumbnail.ts";
 import { png } from "./testkit.ts";
@@ -127,6 +128,37 @@ test("check and uncheck are kept per thread and validated", () => {
   state = applySelection(THREAD, { checkAll: true }, options);
   assert.equal(state.totals.unchecked, 0);
   assert.throws(() => applySelection(THREAD, { uncheck: ["IMG-099"] }, options), /not an image of this thread/);
+});
+
+test("with automatic selection on, a tick pins, and the latest turn's fetches are listed (v0.3)", () => {
+  // Turn 3: the model fetched IMG-001 with cam_view_image.
+  const fetched = turn("t3") +
+    line("response_item", { type: "custom_tool_call", call_id: "c3", name: "exec", input: 'await tools.mcp__codex_attachment_manager__cam_view_image({ids:["IMG-001"]})' }) +
+    line("response_item", { type: "custom_tool_call_output", call_id: "c3", output: [{ type: "input_text", text: "[图片 IMG-001 取回的原图｜a.png｜用户上传｜第 1 轮｜64×32]" }, { type: "input_image", image_url: `data:image/png;base64,${red.toString("base64")}` }] });
+  const options = sampleSessions(fetched);
+  applySelection(THREAD, { uncheck: ["IMG-003"] }, options);
+  let state = applySelection(THREAD, { auto: true }, options);
+  assert.deepEqual([state.auto, state.fetched, state.images.length], [true, ["IMG-001"], 3], "the copy is no row of its own");
+  assert.deepEqual(state.images.map((image) => [image.id, image.checked, image.fetched]), [["IMG-001", false, true], ["IMG-002", false, false], ["IMG-003", false, false]]);
+  state = applySelection(THREAD, { check: ["IMG-002"], mode: "auto" }, options);
+  assert.deepEqual(state.images.map((image) => image.checked), [false, true, false]);
+  assert.equal(state.totals.unchecked, 2);
+  // Switched off, the manual ticks are back as they were; switched on again, so is the pin.
+  state = applySelection(THREAD, { auto: false }, options);
+  assert.deepEqual([state.auto, state.images.map((image) => image.checked)], [false, [true, true, false]]);
+  assert.deepEqual(loadPanelState(THREAD, { ...options }).images.map((image) => image.checked), [true, true, false]);
+  assert.deepEqual(applySelection(THREAD, { auto: true }, options).images.map((image) => image.checked), [false, true, false]);
+});
+
+test("checking and unchecking keep automatic selection's switch and pins (v0.3)", () => {
+  const options = sampleSessions();
+  const dir = join(options.dataRoot, "selection");
+  const auto = { auto: true, autoAt: "2026-10-06T10:00:00Z", autoSince: "2026-10-06T10:00:00Z", pinned: { "msg_1#1": { id: "IMG-002", at: "2026-10-06T10:00:00Z" } } };
+  writeSelection({ threadId: THREAD, unchecked: {}, ...auto }, dir);
+  applySelection(THREAD, { uncheck: ["IMG-001"] }, options);
+  const { unchecked, ...rest } = readSelection(THREAD, dir);
+  assert.deepEqual(Object.values(unchecked).map((entry) => entry.id), ["IMG-001"]);
+  assert.deepEqual(rest, { threadId: THREAD, ...auto });
 });
 
 test("thumbnails keep the aspect ratio and fit the requested size", () => {

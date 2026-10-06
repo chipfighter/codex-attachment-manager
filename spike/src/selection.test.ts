@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { hasUnchecked } from "../../plugin/src/proxy.ts";
+import { hasUnchecked, needsRewrite } from "../../plugin/src/proxy.ts";
 import { effectiveSelection, readSelection, writeSelection } from "../../plugin/src/selection.ts";
 import { startThread } from "./testfixtures.ts";
 
@@ -65,4 +65,27 @@ test("a thread whose rollout is not written yet is looked up again later", () =>
   // Codex files a new rollout in today's folder.
   startThread(sessionsDir, LATE, { forked_from_id: PARENT, timestamp: "2026-09-24T12:00:00Z" });
   assert.deepEqual(Object.values(effectiveSelection(LATE, sessionsDir, dir).unchecked).map((entry) => entry.id), ["IMG-001"]);
+});
+
+// v0.3: automatic selection's switch and pins are inherited the same way. FORK was made at 12:00.
+test("a fork takes automatic selection when it was on at the fork, and the pins made before it", () => {
+  const { sessionsDir, dir } = setup();
+  const pinned = { "msg_1#0": { id: "IMG-001", at: "2026-09-24T11:40:00Z" }, "msg_2#0": { id: "IMG-002", at: "2026-09-24T13:00:00Z" } };
+  writeSelection({ threadId: PARENT, unchecked: {}, auto: true, autoAt: "2026-09-24T11:30:00Z", autoSince: "2026-09-24T11:30:00Z", pinned }, dir);
+  const fork = effectiveSelection(FORK, sessionsDir, dir);
+  assert.equal(fork.auto, true);
+  assert.deepEqual(Object.values(fork.pinned ?? {}).map((entry) => entry.id), ["IMG-001"]);
+  assert.equal(needsRewrite(FORK, dir, sessionsDir), true);
+});
+
+test("switched on again after the fork, the switch stays the parent's; first used after it, nothing comes along", () => {
+  const again = setup();
+  writeSelection({ threadId: PARENT, unchecked: {}, auto: true, autoAt: "2026-09-24T12:30:00Z", autoSince: "2026-09-24T11:00:00Z" }, again.dir);
+  const fork = effectiveSelection(FORK, again.sessionsDir, again.dir);
+  assert.equal(fork.auto, false);
+  assert.equal(needsRewrite(FORK, again.dir, again.sessionsDir), true, "copies fetched before the fork are still left out of its requests");
+  const later = setup();
+  writeSelection({ threadId: PARENT, unchecked: {}, auto: true, autoAt: "2026-09-24T12:30:00Z", autoSince: "2026-09-24T12:30:00Z" }, later.dir);
+  assert.equal(effectiveSelection(FORK, later.sessionsDir, later.dir).auto, undefined);
+  assert.equal(needsRewrite(FORK, later.dir, later.sessionsDir), false);
 });

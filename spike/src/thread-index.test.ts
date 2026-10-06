@@ -172,3 +172,22 @@ test("when a page the history starts in is gone for good (its task deleted), the
   assert.deepEqual(loadThreadIndex(dir, THREAD).images.map((i) => i.name), ["b.png"], "the engine reads what is left too");
   assert.throws(() => readThreadHistory(dir, "01a0d301-0000-7000-8000-0000000000ee"), /no rollout found/, "a thread without a page of its own still has no history");
 });
+
+// v0.3: what the model fetched with cam_view_image is the same image again, kept apart as a copy of the original.
+test("an image the model fetched with cam_view_image is a copy without an id, and the ids after it stay", () => {
+  const { dir, day } = sessions();
+  const fetched = (callId: string, label: string, bytes: Buffer) =>
+    line("response_item", { type: "custom_tool_call", call_id: callId, name: "exec", input: 'await tools.mcp__codex_attachment_manager__cam_view_image({ids:["IMG-001"]})' }) +
+    line("response_item", { type: "custom_tool_call_output", call_id: callId, output: [{ type: "input_text", text: "Script completed" }, { type: "input_text", text: label }, { type: "input_image", image_url: url(bytes) }] });
+  writeFileSync(join(day, `rollout-2026-09-24T10-00-00-${THREAD}.jsonl`),
+    line("session_meta", { id: THREAD }) +
+    turn("t1") + upload("msg_1", "t1", "a.png", red) +
+    turn("t2") + fetched("c1", "[图片 IMG-001 取回的原图｜a.png｜用户上传｜第 1 轮｜4×4]", red) +
+    // A line naming IMG-001 before an image that is not IMG-001 makes no copy.
+    fetched("c2", "[Image IMG-001 fetched original | a.png | uploaded by the user | turn 1 | 4×4]", blue) +
+    turn("t3") + upload("msg_3", "t3", "b.png", blue));
+  const index = loadThreadIndex(dir, THREAD);
+  assert.deepEqual(index.images.map((image) => [image.id, image.turn]), [["IMG-001", 1], ["IMG-002", 2], ["IMG-003", 3]]);
+  assert.deepEqual([...index.copies.values()], [{ key: "custom_tool_call_output:c1#0", of: "IMG-001", turn: 2 }]);
+  assert.equal(index.byKey.has("custom_tool_call_output:c1#0"), false);
+});

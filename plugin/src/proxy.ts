@@ -6,6 +6,8 @@
 // v0.1-3: reports its build and version; POST /__cam/retire hands the port to a newer engine (see engine.ts).
 // v0.1-11: pixel fingerprints go to the shared cache in the data directory, for the panels to reuse.
 // v0.1-14: the text for the model is in the language the panel last reported (Codex's interface language).
+// v0.3: automatic selection — a thread with it on leaves out the images of earlier turns that are not pinned, and a
+// copy the model fetched is sent in its own turn only (spec v0.3).
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
@@ -191,9 +193,28 @@ export function hasUnchecked(threadId: string | null, dir = selectionDir, sessio
   try { return Object.keys(effectiveSelection(threadId, sessionsDir, dir).unchecked).length > 0; } catch { return false; }
 }
 
+// Whether a thread's requests go through the rewrite (and so over HTTP): something unchecked, or automatic selection
+// used at some point (v0.3), since from then on the history may hold copies the model fetched, left out of later turns.
+export function needsRewrite(threadId: string | null, dir = selectionDir, sessionsDir = join(codexHome(), "sessions")): boolean {
+  if (!threadId) return false;
+  try {
+    const selection = effectiveSelection(threadId, sessionsDir, dir);
+    return Object.keys(selection.unchecked).length > 0 || !!selection.autoSince;
+  } catch { return false; }
+}
+
+// The turn a request belongs to, as numbered in the index; a turn not written to the rollout yet comes after the last.
+// Without a turn id the last one counts as current, so its images are sent rather than left out.
+export function currentTurnOf(index: ThreadIndex, turnId: string | null): number {
+  if (!turnId) return index.turns;
+  return index.turnNumbers.get(turnId) ?? index.turns + 1;
+}
+
 // P2: replace the thread's unchecked images with placeholders. Whenever the body cannot be handled safely it is
 // forwarded unchanged and the reason is logged; the report never contains conversation content.
-export function rewriteBody(original: Buffer, encoding: string | undefined, threadId: string, sessionsDir: string, dir = selectionDir): { body: Buffer; report: Json } {
+// v0.3: with automatic selection on, the images of earlier turns that are not pinned instead; in either mode, copies
+// the model fetched in an earlier turn.
+export function rewriteBody(original: Buffer, encoding: string | undefined, threadId: string, sessionsDir: string, dir = selectionDir, turnId: string | null = null): { body: Buffer; report: Json } {
   const decoded = decodeBody(original, encoding);
   if (!decoded) return { body: original, report: { skipped: "undecodable body" } };
   const text = decoded.toString("utf8");
@@ -211,14 +232,23 @@ export function rewriteBody(original: Buffer, encoding: string | undefined, thre
     return stored ? { id: stored.id, name: ref.name, label: ref.label, kind: ref.kind, turn: null, width: ref.width, height: ref.height } : undefined;
   };
   const pixels = (ref: ImageRef) => index.byKey.get(ref.key)?.pixelSha256 ?? pixelHashOf(json.input, ref);
-  const { items, report } = rewriteItems(json.input, describe, new Set(Object.keys(selection.unchecked)), pixels, currentLang());
+  const current = currentTurnOf(index, turnId);
+  const copies = new Map([...index.copies.values()].filter((copy) => copy.turn === null || copy.turn < current).map((copy) => [copy.key, copy.of]));
+  let leaveOut = new Set(Object.keys(selection.unchecked));
+  if (selection.auto) {
+    const pinned = selection.pinned ?? {};
+    leaveOut = new Set(index.images.filter((image) => image.replaceable && image.turn !== null && image.turn < current && !pinned[image.key]).map((image) => image.key));
+  }
+  const { items, report } = rewriteItems(json.input, describe, leaveOut, pixels, { lang: currentLang(), copies, ...(selection.auto ? { auto: { currentTurn: current } } : {}) });
   const summary: Json = {
     images: report.images,
     replaced: report.replaced.map(({ key: _key, ...rest }) => rest),
     locked: report.locked,
     sentImageHashes: report.sentContentIds.map((id) => id.slice(0, 16)),
+    ...(selection.auto ? { auto: true } : {}),
+    ...(report.copies.length ? { copies: report.copies } : {}),
   };
-  if (!report.replaced.length) return { body: original, report: summary };
+  if (!report.replaced.length && !report.copies.length) return { body: original, report: summary };
   json.input = items;
   const next = Buffer.from(JSON.stringify(json), "utf8");
   const body = encodeBody(next, encoding);
@@ -301,7 +331,7 @@ async function main(): Promise<void> {
   };
   setInterval(() => {
     for (const [threadId, connections] of live) {
-      if (!hasUnchecked(threadId)) continue;
+      if (!needsRewrite(threadId)) continue;
       for (const connection of connections) {
         if (Date.now() - connection.last < 1500) {
           // A turn still running here keeps the images the server already holds; noted once so the panel can say so.
@@ -338,7 +368,7 @@ async function main(): Promise<void> {
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
     const identity = requestIdentity(req.headers);
-    const rewrite = req.method === "POST" && /\/responses(\/compact)?$/.test(path) && hasUnchecked(identity.threadId);
+    const rewrite = req.method === "POST" && /\/responses(\/compact)?$/.test(path) && needsRewrite(identity.threadId);
     const chunks: Buffer[] = [];
     let requestBytes = 0;
     let responseBytes = 0;
@@ -399,7 +429,7 @@ async function main(): Promise<void> {
     req.on("end", () => {
       const original = Buffer.concat(chunks);
       let out: { body: Buffer; report: Json };
-      try { out = rewriteBody(original, req.headers["content-encoding"] as string | undefined, identity.threadId!, sessionsDir); }
+      try { out = rewriteBody(original, req.headers["content-encoding"] as string | undefined, identity.threadId!, sessionsDir, selectionDir, identity.turnId); }
       catch (error) { out = { body: original, report: { skipped: `rewrite failed: ${String(error)}` } }; }
       extra = { rewrite: out.report };
       const headers = forwardHeaders(req.headers);
@@ -418,9 +448,9 @@ async function main(): Promise<void> {
       client.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
       return;
     }
-    if (/\/responses$/.test(path) && (forceHttp || hasUnchecked(identity.threadId))) {
+    if (/\/responses$/.test(path) && (forceHttp || needsRewrite(identity.threadId))) {
       client.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-      log({ at: new Date(started).toISOString(), id, transport: "websocket", path, declined: 426, reason: forceHttp ? "--force-http" : "thread has unchecked images", ...identity });
+      log({ at: new Date(started).toISOString(), id, transport: "websocket", path, declined: 426, reason: forceHttp ? "--force-http" : "thread needs its requests rewritten", ...identity });
       return;
     }
     let up = head.length;
