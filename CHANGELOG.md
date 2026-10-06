@@ -17,7 +17,7 @@ Let the model pick the images it needs.
 
 - Tested with three GPT-6 models at low effort, in Chinese and English. GPT-6 Sol and Astra fetched the images they needed, left the rest alone, and read what they fetched correctly. GPT-6 Luna mostly decided right but sometimes misread small details in a fetched image, as it does with images opened with Codex's own image viewer. Pin an image whose details matter, or use a larger model.
 - Each image the model fetches adds a request to that turn.
-- Platforms are the same as in 0.2.0: tested on Windows with the Codex desktop app 26.930; CI checks that the plugin installs and starts on macOS and Linux.
+- Platforms are the same as in 0.2.0. On Windows, the self-tests ran on the Codex runtime of the desktop app 26.930, and the plugin runs in that app; automatic selection hasn't been tried by hand in the desktop app yet, so feedback in the issues is welcome. CI checks that the plugin installs and starts on macOS and Linux.
 
 ## [0.2.0] - 2026-09-29
 
