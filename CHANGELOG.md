@@ -2,6 +2,23 @@
 
 When a version is released, its section here becomes the GitHub release notes.
 
+## [0.3.0] - 2026-10-06
+
+Let the model pick the images it needs.
+
+### Features
+
+- An *Auto-select* switch at the bottom of the panel, for each task. With it on, images from earlier turns are left out by default, even one generated a turn ago, and the model fetches the ones it needs by ID with the plugin's `cam_view_image` tool, for that turn only. The placeholders before a fetched image stay as they were, so the cached part of the request isn't broken.
+- Check an image to pin it: pinned images go every turn. Pins are kept apart from your own checks, which come back as they were when you switch Auto-select off.
+- The panel lists what the model fetched in the latest turn and marks those rows; click an ID to jump to one. The request estimate becomes a minimum, since what the model will fetch isn't known beforehand.
+- With Auto-select off, everything works as in 0.2.0, and the requests sent are byte-identical. Codex doesn't list plugin tools to the model, so the model only learns about the tool from the note it gets with Auto-select on.
+
+### Notes
+
+- Tested with three GPT-6 models at low effort, in Chinese and English. GPT-6 Sol and Astra fetched the images they needed, left the rest alone, and read what they fetched correctly. GPT-6 Luna mostly decided right but sometimes misread small details in a fetched image, as it does with images opened with Codex's own image viewer. Pin an image whose details matter, or use a larger model.
+- Each image the model fetches adds a request to that turn.
+- Platforms are the same as in 0.2.0: tested on Windows with the Codex desktop app 26.930; CI checks that the plugin installs and starts on macOS and Linux.
+
 ## [0.2.0] - 2026-09-29
 
 Filter the panel's list by where each image came from.
