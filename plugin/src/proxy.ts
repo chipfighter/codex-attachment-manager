@@ -532,6 +532,8 @@ async function main(): Promise<void> {
     let status = 0;
     let finished = false;
     let extra: Json = {};
+    // Synthetic test threads only (--dump-requests): the body as the engine sent it, after a rewrite.
+    let sentBody: Buffer | null = null;
     const collect = () => req.on("data", (chunk: Buffer) => { chunks.push(chunk); requestBytes += chunk.length; });
     const finish = (error?: string) => {
       if (finished) return;
@@ -551,6 +553,7 @@ async function main(): Promise<void> {
             mkdirSync(dumpDir, { recursive: true });
             const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^(x-codex|session_id|conversation_id|openai-beta|content-|anthropic-(beta|version)|x-claude-code-|user-agent)/.test(name)));
             writeFileSync(join(dumpDir, `${new Date(started).toISOString().replaceAll(":", "-")}-${id}.json`), JSON.stringify({ path, headers, body: redactImages(json) }, null, 2));
+            if (sentBody) { const sent = decodeBody(sentBody, req.headers["content-encoding"] as string | undefined); if (sent) writeFileSync(join(dumpDir, `${new Date(started).toISOString().replaceAll(":", "-")}-${id}.sent.json`), JSON.stringify({ path, body: redactImages(JSON.parse(sent.toString("utf8"))) }, null, 2)); }
           }
         } catch { details = { kind: "unparsed" }; }
       }
@@ -615,6 +618,7 @@ async function main(): Promise<void> {
       try { out = claudeRewrite ? rewriteClaudeBody(original, encoding, claudeSession!) : rewriteBody(original, encoding, identity.threadId!, sessionsDir, selectionDir, identity.turnId); }
       catch (error) { out = { body: original, report: { skipped: `rewrite failed: ${String(error)}` } }; }
       extra = { rewrite: out.report };
+      if (dumpDir && out.body !== original) sentBody = out.body;
       const headers = forwardHeaders(req.headers, upstream);
       headers["content-length"] = String(out.body.length);
       if (out.report.experiment?.beta) headers["anthropic-beta"] = [String(headers["anthropic-beta"] ?? ""), out.report.experiment.beta].filter(Boolean).join(",");
