@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import zlib from "node:zlib";
-import { describeBody, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, needsRewrite, outboundProxy, rewriteBody, requestIdentity } from "../../plugin/src/proxy.ts";
+import { claudeIdentity, describeBody, forwardHeaders, hasUnchecked, hasUnsafeInteger, imageSizesOf, macProxy, needsRewrite, outboundProxy, redactImages, rewriteBody, requestIdentity, upstreamOf } from "../../plugin/src/proxy.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
 import { png } from "./testkit.ts";
 
@@ -146,4 +146,45 @@ test("with automatic selection, rewriteBody leaves out earlier turns' images tha
   assert.match(text, /上下文管理说明（来自用户安装的上下文素材管理工具）：这个任务开着“自动选图”/);
   assert.deepEqual([report.auto, report.replaced.map((r: Record<string, unknown>) => [r.id, r.mode])], [true, [["IMG-001", "plain"]]]);
   assert.equal(rewriteBody(original, "zstd", threadId, sessions, selections, "t1").body, original, "turn 1's own requests send its images");
+});
+
+// v0.4: Claude Code through the same engine.
+test("Claude Code's /v1/ requests go to api.anthropic.com, everything else to chatgpt.com as before", () => {
+  assert.equal(upstreamOf("/v1/messages"), "api.anthropic.com");
+  assert.equal(upstreamOf("/v1/messages/count_tokens"), "api.anthropic.com");
+  assert.equal(upstreamOf("/backend-api/codex/responses"), "chatgpt.com");
+  assert.equal(upstreamOf("/backend-api/codex/images/generations"), "chatgpt.com");
+  assert.equal(forwardHeaders({ host: "127.0.0.1:17891", "anthropic-beta": "oauth-2025-04-20", connection: "keep-alive" }, "api.anthropic.com").host, "api.anthropic.com");
+  assert.equal(forwardHeaders({ authorization: "Bearer x" }, "api.anthropic.com").authorization, "Bearer x");
+  assert.equal(forwardHeaders({ connection: "keep-alive" }, "api.anthropic.com").connection, undefined);
+});
+
+test("NO_PROXY is checked against each upstream host on its own", () => {
+  const env = { HTTPS_PROXY: "http://127.0.0.1:8888", NO_PROXY: "chatgpt.com" };
+  assert.equal(outboundProxy(env, none, "chatgpt.com"), null);
+  assert.deepEqual(outboundProxy(env, none, "api.anthropic.com"), { host: "127.0.0.1", port: 8888 });
+});
+
+test("a Claude Code session and a subagent's loop are read from their headers", () => {
+  assert.deepEqual(claudeIdentity({ "x-claude-code-session-id": "11111111-2222-4333-8444-555555555555" }), { sessionId: "11111111-2222-4333-8444-555555555555", agentId: null });
+  assert.deepEqual(claudeIdentity({ "x-claude-code-session-id": "s", "x-claude-code-agent-id": "a1" }), { sessionId: "s", agentId: "a1" });
+  assert.deepEqual(claudeIdentity({}), { sessionId: null, agentId: null });
+});
+
+test("Messages metadata counts images in user messages and tool results, and thinking blocks, without content", () => {
+  const data = png(4, 4, () => [1, 2, 3]).toString("base64");
+  const body = {
+    model: "claude-haiku-5-5", stream: true, thinking: { type: "adaptive" },
+    messages: [
+      { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }, { type: "text", text: "secret" }] },
+      { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "s" }, { type: "tool_use", id: "t", name: "Read", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }] }] },
+    ],
+  };
+  const described = describeBody("/v1/messages", body);
+  assert.deepEqual(described, { kind: "messages", model: "claude-haiku-5-5", messages: 3, images: 2, imageBytes: data.length * 2, thinkingBlocks: 1, thinking: "adaptive", stream: true });
+  assert.ok(!JSON.stringify(described).includes("secret"));
+  const redacted = JSON.stringify(redactImages({ ...body, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", data: "A".repeat(400) } }] }] }));
+  assert.ok(!redacted.includes("A".repeat(300)));
+  assert.match(redacted, /<sha256:[0-9a-f]{16} chars:400>/);
 });

@@ -8,6 +8,8 @@
 // v0.1-14: the text for the model is in the language the panel last reported (Codex's interface language).
 // v0.3: automatic selection — a thread with it on leaves out the images of earlier turns that are not pinned, and a
 // copy the model fetched is sent in its own turn only (spec v0.3).
+// v0.4: Claude Code too (the plugin's mod points ANTHROPIC_BASE_URL here): its /v1/… requests go to api.anthropic.com,
+// everything else to chatgpt.com as before. A Claude session is told apart by x-claude-code-session-id.
 // Only metadata is logged (never auth headers or conversation content).
 // Input: [--port 17891] [--stay (no auto-exit)] [--force-http] [--dump-requests (synthetic test threads only)];
 // the outbound proxy is taken from HTTPS_PROXY/HTTP_PROXY or the system proxy settings (Windows, macOS).
@@ -37,13 +39,20 @@ import { loadThreadIndex, pixelHashOf, setPixelCache, type ThreadIndex } from ".
 
 type Json = Record<string, any>;
 const UPSTREAM_HOST = "chatgpt.com";
+// v0.4: Claude Code's API host.
+export const CLAUDE_HOST = "api.anthropic.com";
 const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade", "host"]);
+
+// Codex's requests all start with /backend-api/ (its base URL ends in /backend-api/codex); Claude Code's with /v1/.
+export function upstreamOf(path: string): string {
+  return path.startsWith("/v1/") ? CLAUDE_HOST : UPSTREAM_HOST;
+}
 
 // Outbound proxy: environment first, then the system setting (Windows per-user, macOS); NO_PROXY is honoured for the
 // upstream host.
-export function outboundProxy(env = process.env, systemSetting = readSystemProxy): { host: string; port: number } | null {
+export function outboundProxy(env = process.env, systemSetting = readSystemProxy, upstream = UPSTREAM_HOST): { host: string; port: number } | null {
   const noProxy = (env.NO_PROXY ?? env.no_proxy ?? "").split(",").map((s) => s.trim().replace(/^\./, "")).filter(Boolean);
-  if (noProxy.some((entry) => entry === "*" || UPSTREAM_HOST === entry || UPSTREAM_HOST.endsWith(`.${entry}`))) return null;
+  if (noProxy.some((entry) => entry === "*" || upstream === entry || upstream.endsWith(`.${entry}`))) return null;
   const fromEnv = env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy;
   let value = fromEnv || systemSetting();
   if (!value) return null;
@@ -78,14 +87,14 @@ export function macProxy(scutil: string): string | null {
   return null;
 }
 
-function connectUpstream(via: { host: string; port: number } | null): Promise<tls.TLSSocket> {
+function connectUpstream(via: { host: string; port: number } | null, upstream = UPSTREAM_HOST): Promise<tls.TLSSocket> {
   const startTls = (socket?: net.Socket) => new Promise<tls.TLSSocket>((ok, fail) => {
-    const secure = tls.connect({ socket, host: socket ? undefined : UPSTREAM_HOST, port: 443, servername: UPSTREAM_HOST, ALPNProtocols: ["http/1.1"] }, () => ok(secure));
+    const secure = tls.connect({ socket, host: socket ? undefined : upstream, port: 443, servername: upstream, ALPNProtocols: ["http/1.1"] }, () => ok(secure));
     secure.once("error", fail);
   });
   if (!via) return startTls();
   return new Promise((ok, fail) => {
-    const socket = net.connect(via.port, via.host, () => socket.write(`CONNECT ${UPSTREAM_HOST}:443 HTTP/1.1\r\nHost: ${UPSTREAM_HOST}:443\r\n\r\n`));
+    const socket = net.connect(via.port, via.host, () => socket.write(`CONNECT ${upstream}:443 HTTP/1.1\r\nHost: ${upstream}:443\r\n\r\n`));
     let buffered = Buffer.alloc(0);
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
@@ -101,10 +110,10 @@ function connectUpstream(via: { host: string; port: number } | null): Promise<tl
   });
 }
 
-function forwardHeaders(headers: IncomingHttpHeaders): Record<string, string | string[]> {
+export function forwardHeaders(headers: IncomingHttpHeaders, upstream = UPSTREAM_HOST): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) out[name] = value;
-  out.host = UPSTREAM_HOST;
+  out.host = upstream;
   return out;
 }
 
@@ -113,6 +122,12 @@ export function requestIdentity(headers: IncomingHttpHeaders): { threadId: strin
   let meta: Json = {};
   try { meta = JSON.parse(String(headers["x-codex-turn-metadata"] ?? "{}")); } catch { /* not JSON */ }
   return { threadId: meta.thread_id ?? meta.session_id ?? null, turnId: meta.turn_id ?? null, windowId: (headers["x-codex-window-id"] as string) ?? null };
+}
+
+// v0.4: which Claude Code session a request belongs to, and whether a subagent's loop sent it (its own conversation).
+export function claudeIdentity(headers: IncomingHttpHeaders): { sessionId: string | null; agentId: string | null } {
+  const one = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) || null;
+  return { sessionId: one(headers["x-claude-code-session-id"]), agentId: one(headers["x-claude-code-agent-id"]) };
 }
 
 function decodeBody(body: Buffer, encoding: string | undefined): Buffer | null {
@@ -145,6 +160,23 @@ export function describeBody(path: string, json: Json): Json {
     const inputs = Array.isArray(json.images) ? json.images : json.image ? [json.image] : [];
     return { kind: path.endsWith("edits") ? "image_edit" : "image_generation", model: json.model ?? null, inputImages: inputs.length, size: json.size ?? null };
   }
+  // v0.4: Anthropic Messages, with images in user messages and inside tool results.
+  if (path === "/v1/messages") {
+    const messages: Json[] = Array.isArray(json.messages) ? json.messages : [];
+    let images = 0;
+    let imageBytes = 0;
+    let thinkingBlocks = 0;
+    const visit = (blocks: unknown) => {
+      if (!Array.isArray(blocks)) return;
+      for (const block of blocks as Json[]) {
+        if (block?.type === "image" && typeof block.source?.data === "string") { images++; imageBytes += block.source.data.length; }
+        if (block?.type === "thinking" || block?.type === "redacted_thinking") thinkingBlocks++;
+        if (block?.type === "tool_result") visit(block.content);
+      }
+    };
+    for (const message of messages) visit(message?.content);
+    return { kind: "messages", model: json.model ?? null, messages: messages.length, images, imageBytes, thinkingBlocks, thinking: json.thinking?.type ?? null, stream: json.stream ?? null };
+  }
   return { kind: "other" };
 }
 
@@ -163,7 +195,8 @@ export function imageSizesOf(input: Json[]): Record<string, number> {
 export function redactImages(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
     const inline = /^data:([^;,]+);base64,/.exec(value);
-    const raw = inline ? value.slice(inline[0].length) : key === "result" && value.length > 256 ? value : null;
+    // v0.4: an Anthropic image block keeps its base64 in source.data; a thinking block's signature is opaque too.
+    const raw = inline ? value.slice(inline[0].length) : (key === "result" || key === "data" || key === "signature") && value.length > 256 ? value : null;
     if (raw === null) return value;
     const digest = createHash("sha256").update(raw).digest("hex").slice(0, 16);
     return `${inline ? `data:${inline[1]};base64,` : ""}<sha256:${digest} chars:${raw.length}>`;
@@ -271,6 +304,9 @@ async function main(): Promise<void> {
   const sessionsDir = join(codexHome(), "sessions");
   setPixelCache(pixelCacheDirOf());
   const via = outboundProxy();
+  // v0.4: NO_PROXY may name one upstream host and not the other.
+  const claudeVia = outboundProxy(process.env, readSystemProxy, CLAUDE_HOST);
+  const viaOf = (upstream: string) => (upstream === CLAUDE_HOST ? claudeVia : via);
   const startedAt = new Date().toISOString();
   // v0.1-3: which code this engine runs, so the plugin can tell when an update needs a new engine.
   const build = buildOf();
@@ -351,7 +387,7 @@ async function main(): Promise<void> {
   const onRequest = (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/__cam/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, service: ENGINE_SERVICE, pid: process.pid, startedAt, port, build, version, upstream: UPSTREAM_HOST, via: via ? `${via.host}:${via.port}` : "direct" }));
+      res.end(JSON.stringify({ ok: true, service: ENGINE_SERVICE, pid: process.pid, startedAt, port, build, version, upstream: UPSTREAM_HOST, upstreams: [UPSTREAM_HOST, CLAUDE_HOST], via: via ? `${via.host}:${via.port}` : "direct" }));
       return;
     }
     if (req.url === "/__cam/retire" && req.method === "POST") {
@@ -367,6 +403,7 @@ async function main(): Promise<void> {
     const id = ++sequence;
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
+    const upstream = upstreamOf(path);
     const identity = requestIdentity(req.headers);
     const rewrite = req.method === "POST" && /\/responses(\/compact)?$/.test(path) && needsRewrite(identity.threadId);
     const chunks: Buffer[] = [];
@@ -389,9 +426,9 @@ async function main(): Promise<void> {
           details = describeBody(path, json);
           // Measured on the body as Codex sent it, before any rewrite: the panel's "everything sent" baseline.
           if (/\/responses$/.test(path) && Array.isArray(json.input)) imageSizes = imageSizesOf(json.input);
-          if (dumpDir && /\/responses$/.test(path)) {
+          if (dumpDir && (/\/responses$/.test(path) || path === "/v1/messages")) {
             mkdirSync(dumpDir, { recursive: true });
-            const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^(x-codex|session_id|conversation_id|openai-beta|content-)/.test(name)));
+            const headers = Object.fromEntries(Object.entries(req.headers).filter(([name]) => /^(x-codex|session_id|conversation_id|openai-beta|content-|anthropic-(beta|version)|x-claude-code-|user-agent)/.test(name)));
             writeFileSync(join(dumpDir, `${new Date(started).toISOString().replaceAll(":", "-")}-${id}.json`), JSON.stringify({ path, headers, body: redactImages(json) }, null, 2));
           }
         } catch { details = { kind: "unparsed" }; }
@@ -402,9 +439,9 @@ async function main(): Promise<void> {
       if (/\/responses$/.test(path)) recordRequest(identity.threadId, imageSizes ? { ...entry, imageSizes } : entry);
     };
     // body === null streams the request through unchanged.
-    const send = (headers: Record<string, string | string[]>, body: Buffer | null) => connectUpstream(via).then((socket) => {
+    const send = (headers: Record<string, string | string[]>, body: Buffer | null) => connectUpstream(viaOf(upstream), upstream).then((socket) => {
       // No `agent` option: with agent:false Node ignores createConnection and dials the host directly.
-      const upstream = http.request({ host: UPSTREAM_HOST, method: req.method, path: req.url, headers, createConnection: () => socket }, (answer) => {
+      const outbound = http.request({ host: upstream, method: req.method, path: req.url, headers, createConnection: () => socket }, (answer) => {
         status = answer.statusCode ?? 0;
         const headers: Record<string, string | string[]> = {};
         for (const [name, value] of Object.entries(answer.headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) headers[name] = value;
@@ -414,17 +451,17 @@ async function main(): Promise<void> {
         answer.on("end", () => finish());
         answer.on("error", (error) => finish(String(error)));
       });
-      upstream.on("error", (error) => { if (!res.headersSent) res.writeHead(502); res.end(); finish(String(error)); });
+      outbound.on("error", (error) => { if (!res.headersSent) res.writeHead(502); res.end(); finish(String(error)); });
       // Codex may drop the connection mid-stream; still log the request once.
       res.on("close", () => finish(res.writableFinished ? undefined : "client closed before the response ended"));
-      if (body) upstream.end(body);
-      else { collect(); req.pipe(upstream); }
+      if (body) outbound.end(body);
+      else { collect(); req.pipe(outbound); }
     }, (error) => {
       res.writeHead(502, { "content-type": "text/plain" });
-      res.end(`codex-attachment-manager proxy: cannot reach ${UPSTREAM_HOST}`);
+      res.end(`codex-attachment-manager proxy: cannot reach ${upstream}`);
       finish(String(error));
     });
-    if (!rewrite) { send(forwardHeaders(req.headers), null); return; }
+    if (!rewrite) { send(forwardHeaders(req.headers, upstream), null); return; }
     collect();
     req.on("end", () => {
       const original = Buffer.concat(chunks);
