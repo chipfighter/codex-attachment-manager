@@ -1,0 +1,14 @@
+{
+  "name": "codex-attachment-manager",
+  "owner": {
+    "name": "chipfighter"
+  },
+  "description": "Codex Attachment Manager for Claude Code: choose which past images go to the model with your next message.",
+  "plugins": [
+    {
+      "name": "codex-attachment-manager",
+      "source": "./",
+      "description": "Choose which past images go to the model with your next message, in the same Claude Code session."
+    }
+  ]
+}
