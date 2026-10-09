@@ -6,6 +6,7 @@ Codex Attachment Manager（上下文素材管理器）：让用户逐轮决定�
 
 - [docs/spec.md](docs/spec.md)：目标、范围、硬约束和验收标准，是唯一的事实来源，描述当前版本。
 - [docs/design.md](docs/design.md)：技术方案，讲现在是怎么实现的。
+- [docs/v0.4/plan.md](docs/v0.4/plan.md)：Claude 桌面 Code 接入的 v0.4 变更方案；任务和验收分别见同目录的 `tasks.md`、`acceptance.md`。当前正式规格仍以 `docs/spec.md` 为准，未通过的迁移关卡不算已实现。
 - [docs/history/v0.1/](docs/history/v0.1/)：v0.1 的开发记录（原方案、任务记录、各阶段报告、最初的构想），只作参考，不作依据。
 - [CHANGELOG.md](CHANGELOG.md)：每个版本的更新记录，发布时就是 Release 说明。
 
