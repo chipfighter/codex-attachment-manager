@@ -124,20 +124,21 @@ function loopbackAdded(original) {
   return [...new Set([...entries, '127.0.0.1', 'localhost', '::1'])].join(',')
 }
 
-async function startRouting($) {
+// `attempts` × 0.5 s at most for the engine to answer; false when it did not (yet).
+async function startRouting($, attempts = 60) {
   const saved = await readRouting($)
   // Already switched in this process (the module was reloaded): keep what it saved.
-  if (saved?.active) { routingState = saved; return }
+  if (saved?.active) { routingState = saved; return true }
   const current = await $.env.get('ANTHROPIC_BASE_URL')
-  if (current && !/^https:\/\/api\.anthropic\.com\/?$/.test(current)) return writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'other-endpoint' })
+  if (current && !/^https:\/\/api\.anthropic\.com\/?$/.test(current)) { await writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'other-endpoint' }); return true }
   const providers = [await $.env.get('CLAUDE_CODE_USE_BEDROCK'), await $.env.get('CLAUDE_CODE_USE_VERTEX'), await $.env.get('CLAUDE_CODE_USE_FOUNDRY')]
-  if (providers.some((value) => value && value !== '0')) return writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'provider' })
+  if (providers.some((value) => value && value !== '0')) { await writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'provider' }); return true }
   await writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'waiting' })
   // The plugin's MCP server starts the engine with the session; wait for it to answer. An engine started by an older
   // copy of the plugin (Codex's, not updated yet) does not forward Claude's requests: leave the session alone then.
   let port = null
   let reason = 'no-engine'
-  for (let attempt = 0; attempt < 60 && port === null && reason !== 'engine-old'; attempt++) {
+  for (let attempt = 0; attempt < attempts && port === null && reason !== 'engine-old'; attempt++) {
     try {
       const health = await $.http.fetch(`http://127.0.0.1:${ENGINE_PORT}/__cam/health`)
       const body = health.ok ? JSON.parse(health.text) : null
@@ -146,7 +147,11 @@ async function startRouting($) {
     } catch { /* the engine is still starting */ }
     if (port === null && reason !== 'engine-old') await $.clock.sleep(500)
   }
-  if (port === null) return writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason })
+  if (port === null) {
+    if (reason === 'no-engine' && attempts < 60) return false
+    await writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason })
+    return true
+  }
   const originalNoProxy = await $.env.get('NO_PROXY')
   const originalNoProxyLower = await $.env.get('no_proxy')
   const saving = { active: true, port, originalBaseUrl: current ?? null, originalNoProxy: originalNoProxy ?? null, originalNoProxyLower: originalNoProxyLower ?? null, reason: null }
@@ -160,6 +165,7 @@ async function startRouting($) {
     await restoreRouting($)
     await writeRouting($, { ...saving, active: false, reason: 'failed' })
   }
+  return true
 }
 
 async function restoreRouting($) {
@@ -361,13 +367,23 @@ function drawPreview($, e) {
 export function register(on) {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'cam', description: 'Context assets: choose which images go to the model (Codex Attachment Manager)', immediate: true })
-    // In the background: the first prompt does not wait for the engine.
-    $.clock.after(0, () => { startRouting($).catch(() => {}) })
+    // Before the first request where possible: a resumed session's unchecked images must not go out with it. The
+    // engine usually answers at once; one the plugin's MCP server is still starting gets a few seconds here, then the
+    // rest of the wait goes on in the background.
+    const done = await startRouting($, 12).catch(() => true)
+    if (!done) $.clock.after(0, () => { startRouting($).catch(() => {}) })
+    return next(e)
+  })
+
+  // /clear, /resume and /branch end a session but not this process: its requests keep going through the engine, and
+  // the session state the panel reads is written again for the new session.
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
+    if (routingState) await $.state.set(ROUTING, routingState).catch(() => {})
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
-    await restoreRouting($).catch(() => {})
+    if (e.reason !== 'clear' && e.reason !== 'resume') await restoreRouting($).catch(() => {})
     return next(e)
   })
 
