@@ -32,6 +32,7 @@ import { findImages, type ImageRef } from "./images.ts";
 import { isEntryPoint } from "./entry.ts";
 import { currentLang } from "./language.ts";
 import { migrateDataOnce } from "./migrate-data.ts";
+import { applyClaudeSelection, claudeImageFor, loadClaudePanelState, type ClaudePanelOptions } from "./panel-state.ts";
 import { claudeRequestStatsDirOf, claudeSelectionDirOf, dataDir, pixelCacheDirOf, proxyLogDirOf } from "./paths.ts";
 import { recordRequest } from "./request-stats.ts";
 import { rewriteItems, type Described } from "./rewrite.ts";
@@ -358,6 +359,37 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
   return { body, report: { ...summary, decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
 }
 
+// v0.4: the Claude plugin's panel reads and changes a session's images here (hooks/register.js). The Codex panel goes
+// through the plugin's MCP server; a Claude mod can reach that server only through Claude Code's tool permissions (a
+// prompt for every call, and none at all for app-only tools), so it asks the engine, the one local HTTP service.
+// Loopback only, like everything the engine serves. A page in a browser cannot use it: it would send an Origin header,
+// and our own header makes its request one the browser asks about first, which the engine never answers.
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export function claudePanelApi(method: string, url: string, headers: IncomingHttpHeaders, body: string | null, options: ClaudePanelOptions = {}): { status: number; body: Json } {
+  if (headers.origin !== undefined || headers["x-cam-panel"] !== "1") return { status: 403, body: { error: "forbidden" } };
+  const parsed = new URL(url, "http://localhost");
+  const session = parsed.searchParams.get("session") ?? "";
+  if (!SESSION_ID.test(session)) return { status: 400, body: { error: "no session" } };
+  const lang = currentLang();
+  try {
+    if (method === "GET" && parsed.pathname === "/__cam/claude/panel") return { status: 200, body: { ...loadClaudePanelState(session, options), lang } };
+    if (method === "GET" && parsed.pathname === "/__cam/claude/image") {
+      const max = Number(parsed.searchParams.get("max") ?? 160);
+      return { status: 200, body: claudeImageFor(session, String(parsed.searchParams.get("id") ?? ""), Number.isFinite(max) && max > 0 ? max : 160, options) };
+    }
+    if (method === "POST" && parsed.pathname === "/__cam/claude/select") {
+      if (body === null) return { status: 413, body: { error: "too large" } };
+      const change = JSON.parse(body || "{}");
+      const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : undefined);
+      const state = applyClaudeSelection(session, { uncheck: list(change.uncheck), check: list(change.check), checkAll: change.checkAll === true, auto: typeof change.auto === "boolean" ? change.auto : undefined, mode: change.mode === "auto" ? "auto" : "manual" }, options);
+      return { status: 200, body: { ...state, lang } };
+    }
+    return { status: 404, body: { error: "not found" } };
+  } catch (error) {
+    return { status: 400, body: { error: error instanceof Error ? error.message : String(error) } };
+  }
+}
+
 async function main(): Promise<void> {
   migrateDataOnce(); // v0.1-15: Windows moved the data folder
   const portIndex = process.argv.indexOf("--port");
@@ -464,6 +496,18 @@ async function main(): Promise<void> {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ retiring: true, pid: process.pid }));
       retire(String(req.headers["x-cam-build"] ?? ""));
+      return;
+    }
+    // v0.4: the Claude plugin's panel (claudePanelApi).
+    if ((req.url ?? "").startsWith("/__cam/claude/")) {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      req.on("data", (chunk: Buffer) => { size += chunk.length; if (size <= 64 * 1024) chunks.push(chunk); });
+      req.on("end", () => {
+        const answer = claudePanelApi(req.method ?? "GET", req.url ?? "/", req.headers, size <= 64 * 1024 ? Buffer.concat(chunks).toString("utf8") : null);
+        res.writeHead(answer.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        res.end(JSON.stringify(answer.body));
+      });
       return;
     }
     inFlight++;

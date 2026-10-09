@@ -28,12 +28,12 @@ import { fileURLToPath } from "node:url";
 import { codexHome } from "./codexconfig.ts";
 import { bindThread, isUserThread, newThreads, resolveThread } from "./binding.ts";
 import { loadClaudeIndex } from "./claude-index.ts";
-import { DEFAULT_PORT, ensureEngine, type Health } from "./engine.ts";
+import { DEFAULT_PORT, ensureEngine } from "./engine.ts";
 import { isEntryPoint } from "./entry.ts";
 import { currentLang, langOf, rememberLang, type Lang } from "./language.ts";
 import { say } from "./messages.ts";
 import { migrateDataOnce } from "./migrate-data.ts";
-import { applyClaudeSelection, applySelection, claudeImageFor, imageFor, loadClaudePanelState, loadPanelState, type ClaudePanelOptions, type PanelState } from "./panel-state.ts";
+import { applySelection, claudeImageFor, imageFor, loadPanelState, type ClaudePanelOptions, type PanelState } from "./panel-state.ts";
 import { claudeSelectionDirOf, dataDir, pixelCacheDirOf, selectionDirOf } from "./paths.ts";
 import { fetchedLabel, fetchWords } from "./rewrite.ts";
 import { effectiveSelection, readSelection } from "./selection.ts";
@@ -102,8 +102,9 @@ export function toolsFor(lang: Lang) {
 }
 export const TOOLS = toolsFor("zh");
 
-// v0.4: under Claude Code. Claude Code lists a plugin's tools to the model, so only the fetch tool is listed; the mod
-// calls the panel's tools (and cam_engine) by name, and the model cannot change the user's selection.
+// v0.4: under Claude Code only the model's fetch tool is listed. The Claude panel (the mod) reads and changes a
+// session's state through the engine (proxy.ts, claudePanelApi): a mod reaches an MCP server only through Claude Code's
+// tool permissions, a prompt for every call, and Claude Code registers no app-only tool at all.
 export const HOST: "codex" | "claude" = process.env.CAM_HOST === "claude" ? "claude" : "codex";
 export const claudeToolsFor = (lang: Lang) => toolsFor(lang).filter((tool) => tool.name === "cam_view_image");
 
@@ -122,10 +123,8 @@ export function readResource(uri: string): Json {
   return { contents: [{ uri, mimeType: PANEL_MIME, text, _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] }, prefersBorder: false } } }] };
 }
 
-// Whether this instance last found the engine running; null until the first check (and in tests). v0.4: and what the
-// engine said about itself then (the Claude plugin's mod switches only to an engine that forwards Claude's requests).
+// Whether this instance last found the engine running; null until the first check (and in tests).
 let engineRunning: boolean | null = null;
-let lastHealth: Health | null = null;
 const enginePort = Number(process.env.CAM_ENGINE_PORT ?? DEFAULT_PORT);
 // v0.1-5: whether config.toml points Codex at the engine, and whether that differs from what it said when this instance
 // started (about when Codex read it): only a difference waits for a restart, so 停用 then 启用 again needs none.
@@ -241,25 +240,14 @@ export function callTool(name: string, args: Json, meta: Json | undefined, sessi
   throw new Error(`unknown tool ${name}`);
 }
 
-// v0.4: the tools under Claude Code. The mod reads results as JSON text: Claude Code hands a mod the content blocks,
-// and structuredContent only for tools that declare an output schema.
+// v0.4: the model's fetch tool under Claude Code. The session is the one the call names (the mod adds it), else the
+// one Claude Code started this service for.
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const asJson = (data: Json) => ({ content: [{ type: "text", text: JSON.stringify(data) }], structuredContent: data });
 
 export function callClaudeTool(name: string, args: Json, options: ClaudePanelOptions = {}, env: NodeJS.ProcessEnv = process.env): Json {
   const lang = langOf(args.lang) ?? currentLang();
-  if (name === "cam_engine") return asJson({ port: enginePort, running: engineRunning, health: lastHealth, lang });
   const sessionId = String(args.sessionId ?? env.CLAUDE_CODE_SESSION_ID ?? "");
   if (!SESSION_ID.test(sessionId)) throw new Error(say(lang, "call.noThread"));
-  const panel = (state: PanelState) => asJson({ ...state, engineRunning, port: enginePort, lang });
-  if (name === "cam_panel") return panel(loadClaudePanelState(sessionId, options));
-  if (name === "cam_set_selection") {
-    return panel(applyClaudeSelection(sessionId, { uncheck: args.uncheck, check: args.check, checkAll: args.checkAll, auto: typeof args.auto === "boolean" ? args.auto : undefined, mode: args.mode === "auto" ? "auto" : "manual" }, options));
-  }
-  if (name === "cam_image") {
-    const image = claudeImageFor(sessionId, String(args.id), Number(args.maxSide ?? 160), options);
-    return asJson({ id: image.id, available: image.dataUrl !== null, dataUrl: image.dataUrl });
-  }
   if (name === "cam_view_image") {
     const words = fetchWords(lang);
     const ids: string[] = Array.isArray(args.ids) ? args.ids.map(String) : typeof args.id === "string" ? [args.id] : [];
@@ -297,7 +285,6 @@ function main(): void {
     if (result.state !== "running" || engineState !== "running") log({ event: "engine", host: HOST, state: result.state, enginePid: result.health?.pid ?? null, build: result.health?.build ?? null, ...replaced });
     engineState = result.state;
     engineRunning = result.state !== "failed";
-    lastHealth = result.health;
   };
   log({ event: "start", ppid: process.ppid, host: HOST });
   setupState(); // what Codex read when it started this session

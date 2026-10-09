@@ -7,12 +7,14 @@
 //    the engine forwards the same headers to api.anthropic.com.
 // 2. The panel. /cam opens a pane listing the session's images by turn, with thumbnails, a check box each, a check box
 //    per turn, automatic selection and a preview, like the Codex panel (plugin/src/panel.html). It reads and changes
-//    everything through the plugin service ($.mcp.call), never through the model.
+//    everything through the engine's local panel API (proxy.ts, claudePanelApi), never through the model: a mod
+//    reaches the plugin's MCP server only through Claude Code's tool permissions, a prompt for every call.
 // Also: the model's cam_view_image call gets this session's id (the service may outlive a /clear or /resume).
-// Input: mod events. Output: env changes for this process, a pane, tool calls to the plugin's own MCP server.
+// Input: mod events. Output: env changes for this process, a pane, requests to the engine on 127.0.0.1.
 
 const PLUGIN = 'codex-attachment-manager'
-const SERVER_KEY = 'codex_attachment_manager'
+// The engine's port (engine.ts, DEFAULT_PORT); the plugin's MCP server starts the engine on it.
+const ENGINE_PORT = 17891
 const PANE = 'cam'
 const PREVIEW = 'cam-preview'
 const ROUTING = { plugin: 'codex-attachment-manager', key: 'routing' }
@@ -80,9 +82,8 @@ const WORDS = {
   },
 }
 
-// What the panel shows, kept between redraws: the plugin service's latest answer for the session, thumbnails by
-// session and id, the open preview, and whether the pane is open.
-let server = null
+// What the panel shows, kept between redraws: the engine's latest answer for the session, thumbnails by session and
+// id, the open preview, and whether the pane is open.
 let panel = null
 let panelSession = null
 let lastError = null
@@ -94,22 +95,15 @@ let routingState = null
 const thumbs = new Map()
 const previews = new Map()
 
-async function serverName($) {
-  if (server) return server
-  const connected = await $.mcp.connect(SERVER_KEY)
-  if (connected.isConnected) server = connected.server
-  return server
+// The engine's panel API answers in JSON; the header marks a request as the panel's (a browser page cannot send it).
+async function api($, path, init = {}) {
+  const response = await $.http.fetch(`http://127.0.0.1:${ENGINE_PORT}${path}`, { ...init, headers: { 'x-cam-panel': '1', ...(init.headers ?? {}) } })
+  let body = null
+  try { body = response.text ? JSON.parse(response.text) : null } catch { body = null }
+  if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+  return body
 }
-
-// The plugin service answers the mod in JSON text (plugin-server.ts, callClaudeTool).
-async function call($, tool, args = {}) {
-  const name = await serverName($)
-  if (!name) throw new Error('the plugin service is not connected')
-  const result = await $.mcp.call(name, tool, args)
-  const text = (result.content ?? []).find((block) => block.type === 'text')?.text ?? ''
-  if (result.isError) throw new Error(text || 'error')
-  return JSON.parse(text)
-}
+const query = (params) => Object.entries(params).map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join('&')
 
 const words = () => WORDS[panel?.lang === 'en' ? 'en' : 'zh']
 
@@ -139,20 +133,18 @@ async function startRouting($) {
   const providers = [await $.env.get('CLAUDE_CODE_USE_BEDROCK'), await $.env.get('CLAUDE_CODE_USE_VERTEX'), await $.env.get('CLAUDE_CODE_USE_FOUNDRY')]
   if (providers.some((value) => value && value !== '0')) return writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'provider' })
   await writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason: 'waiting' })
-  // The plugin service starts the engine with the session; wait for it to answer.
+  // The plugin's MCP server starts the engine with the session; wait for it to answer. An engine started by an older
+  // copy of the plugin (Codex's, not updated yet) does not forward Claude's requests: leave the session alone then.
   let port = null
   let reason = 'no-engine'
-  for (let attempt = 0; attempt < 60 && port === null; attempt++) {
+  for (let attempt = 0; attempt < 60 && port === null && reason !== 'engine-old'; attempt++) {
     try {
-      const info = await call($, 'cam_engine', {})
-      if (info.port) {
-        const health = await $.http.fetch(`http://127.0.0.1:${info.port}/__cam/health`)
-        const body = health.ok ? JSON.parse(health.text) : null
-        if (body?.service === PLUGIN && Array.isArray(body.upstreams) && body.upstreams.includes('api.anthropic.com')) port = info.port
-        else if (body?.service === PLUGIN) reason = 'engine-old'
-      }
-    } catch { /* the service or the engine is still starting */ }
-    if (port === null) await $.clock.sleep(500)
+      const health = await $.http.fetch(`http://127.0.0.1:${ENGINE_PORT}/__cam/health`)
+      const body = health.ok ? JSON.parse(health.text) : null
+      if (body?.service === PLUGIN && Array.isArray(body.upstreams) && body.upstreams.includes('api.anthropic.com')) port = ENGINE_PORT
+      else if (body?.service === PLUGIN) reason = 'engine-old'
+    } catch { /* the engine is still starting */ }
+    if (port === null && reason !== 'engine-old') await $.clock.sleep(500)
   }
   if (port === null) return writeRouting($, { active: false, port: null, originalBaseUrl: null, originalNoProxy: null, originalNoProxyLower: null, reason })
   const originalNoProxy = await $.env.get('NO_PROXY')
@@ -188,12 +180,12 @@ async function refresh($) {
   try {
     const sessionId = await $.session.id()
     if (sessionId !== panelSession) { thumbs.clear(); previews.clear(); panelSession = sessionId }
-    panel = await call($, 'cam_panel', { sessionId })
+    panel = await api($, `/__cam/claude/panel?${query({ session: sessionId })}`)
     lastError = null
     for (const image of panel.images) {
       const key = `${sessionId}:${image.id}`
       if (thumbs.has(key)) continue
-      try { thumbs.set(key, (await call($, 'cam_image', { sessionId, id: image.id, maxSide: THUMB_SIDE })).dataUrl) } catch { thumbs.set(key, null) }
+      try { thumbs.set(key, (await api($, `/__cam/claude/image?${query({ session: sessionId, id: image.id, max: THUMB_SIDE })}`)).dataUrl) } catch { thumbs.set(key, null) }
     }
   } catch (error) {
     lastError = String(error?.message ?? error)
@@ -205,7 +197,7 @@ async function refresh($) {
 
 async function change($, args) {
   try {
-    panel = await call($, 'cam_set_selection', { sessionId: await $.session.id(), ...args })
+    panel = await api($, `/__cam/claude/select?${query({ session: await $.session.id() })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })
     lastError = null
   } catch (error) {
     lastError = String(error?.message ?? error)
@@ -226,7 +218,7 @@ async function openPreview($, id) {
   const sessionId = await $.session.id()
   const key = `${sessionId}:${id}`
   if (!previews.has(key)) {
-    try { previews.set(key, (await call($, 'cam_image', { sessionId, id, maxSide: PREVIEW_SIDE })).dataUrl) } catch { previews.set(key, null) }
+    try { previews.set(key, (await api($, `/__cam/claude/image?${query({ session: sessionId, id, max: PREVIEW_SIDE })}`)).dataUrl) } catch { previews.set(key, null) }
   }
   await $.ui.open({ id: PREVIEW, title: id, focus: true, closeOnEscape: true })
   await $.ui.invalidate('ui.render')
