@@ -103,3 +103,18 @@ test("a transcript is found by session id under projects/, and read again as it 
   assert.deepEqual(loadClaudeIndex(id, home).images.map((entry) => entry.id), ["IMG-001", "IMG-002"]);
   assert.equal(loadClaudeIndex("22222222-2222-4333-8444-555555555555", home).images.length, 0);
 });
+
+test("a prompt is a record Claude Code numbers as a turn (turnPosition), a message from another session included", () => {
+  const t = transcript();
+  t.prompt("first", { turnPosition: { promptIndex: 0, turnIndex: 1 } });
+  t.assistant(text("ok"));
+  // A delivery from another session is a meta record, but Claude Code counts it as the turn it starts.
+  t.prompt("Another Claude session sent a message: read c.png", { isMeta: true, origin: { kind: "peer" }, turnPosition: { promptIndex: 0, turnIndex: 2 } });
+  t.assistant({ type: "tool_use", id: "toolu_7", name: "Read", input: { file_path: "c.png" } });
+  t.toolResult("toolu_7", [image(pngC)]);
+  // A meta record without a turn of its own (Claude Code's own reminders) starts none.
+  t.prompt("<system-reminder>x</system-reminder>", { isMeta: true });
+  const index = buildClaudeIndex("s", t.records);
+  assert.equal(index.turns, 2);
+  assert.equal(index.images[0].turn, 2);
+});

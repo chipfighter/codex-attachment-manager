@@ -113,9 +113,12 @@ export function activeChain(records: ClaudeRecord[]): ClaudeRecord[] {
 }
 
 // A prompt the user sent (or a delivery queued as one): not a tool result, not Claude Code's own meta message or a
-// compaction summary.
+// compaction summary. Claude Code 2.1.293 marks the record that starts a turn with turnPosition, also for a message
+// another session delivered (a meta record, origin "peer"); without that mark, a meta record starts none.
 export function isPrompt(record: ClaudeRecord): boolean {
-  if (record.type !== "user" || record.isMeta || record.isCompactSummary || record.toolUseResult !== undefined) return false;
+  if (record.type !== "user" || record.isCompactSummary || record.toolUseResult !== undefined) return false;
+  if (record.turnPosition && typeof record.turnPosition === "object") return true;
+  if (record.isMeta) return false;
   const content = record.message?.content;
   if (typeof content === "string") return true;
   return Array.isArray(content) && content.some((block: Json) => block?.type !== "tool_result");
