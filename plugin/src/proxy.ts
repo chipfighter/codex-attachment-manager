@@ -333,7 +333,7 @@ async function main(): Promise<void> {
     setInterval(() => checkPlugin(false), 15_000).unref();
     watchForCodex(() => {
       checkPlugin(true);
-      log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: "no Codex process left" });
+      log({ at: new Date().toISOString(), event: "engine-exit", pid: process.pid, reason: "no Codex or Claude Code process left" });
       process.exit(0);
     });
   }

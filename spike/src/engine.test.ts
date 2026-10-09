@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { buildOf, compareVersions, countCodexInPs, countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, shouldReplace, watchForCodex, type Health } from "../../plugin/src/engine.ts";
+import { buildOf, compareVersions, countClaudeInPs, countClaudeProcesses, countCodexInPs, countCodexProcesses, engineHealth, ensureEngine, isEngineHealth, shouldReplace, watchForCodex, type Health } from "../../plugin/src/engine.ts";
 import { selectionDirOf } from "../../plugin/src/paths.ts";
 import { readRequestStats, recordRequest } from "../../plugin/src/request-stats.ts";
 import { writeSelection } from "../../plugin/src/selection.ts";
@@ -78,10 +78,19 @@ test("an engine's build follows its code, not its line endings; a missing folder
   assert.equal(buildOf(join(lf, "gone")), null);
 });
 
-test("only different code of the same or a newer version replaces a running engine", () => {
+test("Claude Code processes count too (v0.4): claude.exe on Windows, claude or Claude elsewhere", () => {
+  const rows = '"claude.exe","100","Console","1","9,000 K"\r\n"Claude.exe","101","Console","1","9,000 K"\r\n"codex.exe","102","Console","1","9,000 K"\r\n';
+  assert.equal(countClaudeProcesses(rows), 2);
+  assert.equal(countCodexProcesses(rows), 1);
+  assert.equal(countClaudeInPs("/Applications/Claude.app/Contents/MacOS/Claude\n/Users/x/.local/bin/claude\nclaude-helper\nnode\n"), 2);
+});
+
+test("only different code of a newer version replaces a running engine; the same version only when installing", () => {
   const running = (build?: string, version?: string): Health => ({ ok: true, service: "codex-attachment-manager", pid: 1, startedAt: "", port: 1, build, version });
   assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "aaa", version: "0.1.0" }), false);
-  assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "bbb", version: "0.1.0" }), true, "the same version installed again");
+  assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "bbb", version: "0.1.0" }), false, "v0.4: Codex's and Claude's copies differ until both are updated; the running engine stays");
+  assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "bbb", version: "0.1.0" }, true), true, "the same version installed again (cam install)");
+  assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "aaa", version: "0.1.0" }, true), false, "the same code is never replaced");
   assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: "bbb", version: "0.2.0" }), true);
   assert.equal(shouldReplace(running("aaa", "0.2.0"), { build: "bbb", version: "0.1.0" }), false, "an older plugin still running never pushes a newer engine out");
   assert.equal(shouldReplace(running("aaa", "0.1.0"), { build: null, version: "0.1.0" }), false, "a plugin whose folder is gone");
@@ -117,7 +126,9 @@ test("a newer engine takes over the port at once; the old one exits after the re
   pending.write(`POST /backend-api/codex/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nx-codex-turn-metadata: {"thread_id":"${thread}"}\r\n\r\n{"model":`);
   await sleep(300);
 
-  const next = await ensureEngine({ port, dir: newer, extraArgs: ["--stay"] });
+  // v0.4: the same version with other code waits for an install; the install replaces it.
+  assert.deepEqual([(await ensureEngine({ port, dir: newer, extraArgs: ["--stay"] })).state, (await engineHealth(port))?.pid], ["running", oldPid]);
+  const next = await ensureEngine({ port, dir: newer, extraArgs: ["--stay"], force: true });
   t.after(() => { try { process.kill(next.health!.pid); } catch { /* already gone */ } });
   assert.deepEqual([next.state, next.replaced?.pid, next.health?.build], ["replaced", oldPid, buildOf(newer)]);
   assert.equal((await engineHealth(port))?.pid, next.health!.pid, "new connections reach the new engine");
