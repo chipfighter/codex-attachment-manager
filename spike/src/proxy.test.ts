@@ -188,3 +188,43 @@ test("Messages metadata counts images in user messages and tool results, and thi
   assert.ok(!redacted.includes("A".repeat(300)));
   assert.match(redacted, /<sha256:[0-9a-f]{16} chars:400>/);
 });
+
+test("a Claude Code request is rewritten from the session's transcript and selection; nothing to do keeps the bytes", async () => {
+  const { usualSession, usualRequest } = await import("./claude-fixtures.ts");
+  const { claudeNeedsRewrite, rewriteClaudeBody, claudeImageSizes } = await import("../../plugin/src/proxy.ts");
+  const { buildClaudeIndex } = await import("../../plugin/src/claude-index.ts");
+  const home = mkdtempSync(join(tmpdir(), "cam-claude-home-"));
+  const dir = mkdtempSync(join(tmpdir(), "cam-claude-sel-"));
+  const session = "11111111-2222-4333-8444-555555555555";
+  const { t, p1 } = usualSession();
+  mkdirSync(join(home, "projects", "D--work"), { recursive: true });
+  writeFileSync(join(home, "projects", "D--work", `${session}.jsonl`), t.records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const body = Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", thinking: { type: "adaptive" }, messages: usualRequest() }));
+  assert.equal(claudeNeedsRewrite(session, dir), false);
+  assert.equal(rewriteClaudeBody(body, undefined, session, dir, home, {}).body, body);
+  writeSelection({ threadId: session, unchecked: { [`${p1}#1`]: { id: "IMG-002", at: "2026-10-10T00:00:00Z" } } }, dir);
+  assert.equal(claudeNeedsRewrite(session, dir), true);
+  const out = rewriteClaudeBody(body, undefined, session, dir, home, {});
+  assert.notEqual(out.body, body);
+  assert.deepEqual(out.report.replaced.map((entry: any) => [entry.id, entry.mode]), [["IMG-002", "plain"]]);
+  assert.equal(out.report.noteAt, 1);
+  assert.equal(out.report.thinkingBlocks, 1);
+  const json = JSON.parse(out.body.toString("utf8"));
+  assert.equal(json.messages[1].role, "system");
+  assert.deepEqual(json.thinking, { type: "adaptive" });
+  // The experiment switch asks Anthropic to check the thinking, and names the beta header to add.
+  const experiment = rewriteClaudeBody(body, undefined, session, dir, home, { CAM_EXPERIMENT_BLOCK_BINDING: "error" });
+  assert.deepEqual(JSON.parse(experiment.body.toString("utf8")).thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "error" } });
+  assert.equal(experiment.report.experiment.beta, "thinking-binding-controls-2026-08-01");
+  // Image sizes by key, as the panel's baseline.
+  const sizes = claudeImageSizes(usualRequest(), buildClaudeIndex(session, t.records));
+  assert.deepEqual(Object.keys(sizes).length, 4);
+});
+
+test("Anthropic refusing the thinking after an edited history is told apart from other 400s", async () => {
+  const { thinkingRejected } = await import("../../plugin/src/proxy.ts");
+  const rejected = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "messages.3.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation." } });
+  assert.equal(thinkingRejected(400, rejected), true);
+  assert.equal(thinkingRejected(400, JSON.stringify({ error: { message: "max_tokens: too large" } })), false);
+  assert.equal(thinkingRejected(500, rejected), false);
+});
