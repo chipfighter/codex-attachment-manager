@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildClaudeIndex } from "../../plugin/src/claude-index.ts";
 import { findRequestImages, rewriteMessages } from "../../plugin/src/claude-rewrite.ts";
-import { omissionNote } from "../../plugin/src/rewrite.ts";
+import { claudeNote } from "../../plugin/src/rewrite.ts";
 import { image, pngA, pngB, pngC, text, transcript, usualRequest, usualSession } from "./claude-fixtures.ts";
 
 const noPixels = () => null;
@@ -63,7 +63,9 @@ test("an unchecked pasted image becomes a placeholder; the note follows its mess
   assert.equal(messages[0].content[1].source.data, pngA);
   assert.match(messages[0].content[2].text, /^\[图片 IMG-002 已省略｜未命名｜用户上传｜第 1 轮｜8×8\]\n.*需要 IMG-002/s);
   assert.equal(messages[0].content[3].text, "What are these?");
-  assert.deepEqual(messages[1], { role: "system", content: omissionNote("zh") });
+  assert.equal(messages[1].role, "system");
+  assert.ok(messages[1].content.startsWith(claudeNote("zh")));
+  assert.match(messages[1].content, /上面这条消息里的 IMG-002/);
   // The rest keeps its order; the thinking block and the cache breakpoint are untouched.
   assert.deepEqual(messages[2], request[1]);
   assert.equal(messages.length, request.length + 1);
@@ -104,7 +106,7 @@ test("a placeholder keeps the cache breakpoint the image had; a system message a
   assert.deepEqual(messages[0].content[0].cache_control, { type: "ephemeral" });
   assert.equal(messages.length, 3);
   assert.equal(messages[1].role, "system");
-  assert.equal(messages[1].content[0].text, omissionNote("zh"));
+  assert.ok(messages[1].content[0].text.startsWith(claudeNote("zh")));
   assert.deepEqual(messages[1].content[1], { type: "text", text: "Claude Code's own" });
 });
 

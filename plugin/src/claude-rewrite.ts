@@ -14,7 +14,7 @@
 import type { ClaudeIndex, ClaudeImage } from "./claude-index.ts";
 import { imageDigest, type ImageDigest, type ImageKind } from "./images.ts";
 import type { Lang } from "./language.ts";
-import { autoNote, autoPlaceholder, copyNote, duplicatePlaceholder, includedLabel, newImageWord, omissionNote, plainPlaceholder, type Described, type RewriteReport } from "./rewrite.ts";
+import { autoPlaceholder, claudeNote, copyNote, duplicatePlaceholder, hereNote, includedLabel, newImageWord, plainPlaceholder, type Described, type RewriteReport } from "./rewrite.ts";
 
 type Json = Record<string, any>;
 // msg: the message; part: the block in its content; sub: for an image in a tool result, its position in that result.
@@ -124,13 +124,14 @@ export function rewriteMessages(
     const carried = !before && ref.block.cache_control ? { cache_control: ref.block.cache_control } : {};
     edits.set(where, [...(edits.get(where) ?? []), { at, remove, blocks: [{ type: "text", text, ...carried }] }]);
   };
-  let firstPlain: number | null = null;
+  // The messages holding plain placeholders, each with its omitted images, for the notes that follow them.
+  const plainBy = new Map<number, Described[]>();
   for (const ref of drop) {
     const image = describe(ref)!;
     const copy = lasting.find((other) => same(other, ref));
     const copyImage: Described | null = copy ? describe(copy) ?? { id: newImageWord(lang), name: null, label: null, kind: copy.kind, turn: null, width: copy.width, height: copy.height } : null;
     const text = copyImage ? duplicatePlaceholder(image, copyImage, lang) : auto ? autoPlaceholder(image, lang) : plainPlaceholder(image, lang);
-    if (!copyImage && firstPlain === null) firstPlain = ref.msg;
+    if (!copyImage) plainBy.set(ref.msg, [...(plainBy.get(ref.msg) ?? []), image]);
     report.replaced.push({ id: image.id, key: ref.key!, kind: image.kind, mode: copyImage ? "duplicate" : "plain", sameAs: copyImage?.id ?? null, base64Chars: ref.base64Chars });
     edit(ref, 1, text);
   }
@@ -161,19 +162,23 @@ export function rewriteMessages(
     if (own) content = apply(content, own);
     return { ...message, content };
   });
-  // Only plain placeholders need the note (a duplicate's content is still in view). Right after the user message
-  // holding the first one; when Claude Code put a system message there already, the note joins it, since two system
-  // messages may not follow each other.
-  if (firstPlain !== null) {
-    const text = auto ? autoNote(lang) : omissionNote(lang);
-    const after = next[firstPlain + 1];
+  // Only plain placeholders need a note (a duplicate's content is still in view). Each message holding one is followed
+  // by a short note naming its omitted images, and the first of them also by the full note: Claude does not believe
+  // what a tool result says about itself, and a note far from the placeholder was not enough (desktop tests,
+  // 2026-10-09). A note goes right after the user message, the only place Anthropic allows a system message; when
+  // Claude Code put a system message there already, the note joins it, since two may not follow each other. Later
+  // messages first, so the earlier positions stay as they are.
+  const holding = [...plainBy.keys()].sort((a, b) => a - b);
+  for (const msg of [...holding].reverse()) {
+    const text = `${msg === holding[0] ? `${claudeNote(lang, auto !== undefined)}\n` : ""}${hereNote(plainBy.get(msg)!, lang, auto !== undefined)}`;
+    const after = next[msg + 1];
     if (after?.role === "system") {
       const content = typeof after.content === "string" ? [{ type: "text", text: after.content }] : after.content;
-      next[firstPlain + 1] = { ...after, content: [{ type: "text", text }, ...content] };
+      next[msg + 1] = { ...after, content: [{ type: "text", text }, ...content] };
     } else {
-      next.splice(firstPlain + 1, 0, { role: "system", content: text });
+      next.splice(msg + 1, 0, { role: "system", content: text });
     }
-    report.noteAt = firstPlain + 1;
   }
+  if (holding.length) report.noteAt = holding[0] + 1;
   return { messages: next, report };
 }
