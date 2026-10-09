@@ -144,6 +144,9 @@ export function includedLabel(image: Described, lang: Lang = "zh"): string {
 // v0.3: automatic selection.
 export const autoNote = (lang: Lang) => WORDS[lang].autoNote;
 export const fetchWords = (lang: Lang): FetchWords => WORDS[lang].fetch;
+// v0.4: the same words for a Claude Code request (claude-rewrite.ts).
+export const copyNote = (id: string, lang: Lang) => WORDS[lang].copy(id);
+export const newImageWord = (lang: Lang) => WORDS[lang].newImage;
 
 export function autoPlaceholder(image: Described, lang: Lang = "zh"): string {
   const words = WORDS[lang];
