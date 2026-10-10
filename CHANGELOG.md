@@ -2,6 +2,27 @@
 
 When a version is released, its section here becomes the GitHub release notes.
 
+## [0.4.0] - 2026-10-11
+
+Now in Claude Desktop too, under a new name: Context Attachment Manager.
+
+### Features
+
+- Works with Claude Code in the Code tab of Claude Desktop. Install the plugin from this repository's marketplace and type `/cam` in a session: the same panel as in Codex opens in Claude Desktop's built-in browser, next to the conversation. The image list, previews, unchecking single images or whole turns, filters, the request estimate, `need IMG-xxx`, Auto-select and both languages work as in Codex.
+- Nothing to configure: the plugin points each Claude Code session at the local engine when the session starts and puts it back when the session ends. Your Claude subscription sign-in is passed through unchanged, and no settings files are edited.
+- Claude accounts created on or after August 31, 2026 check the model's earlier thinking against the conversation before it. On such accounts the engine leaves out the earlier thinking that no longer matches the conversation as sent, so unchecking still takes effect. Thinking from after the change is kept, and checking an image again brings back the thinking from before. The panel says how many thinking records the last request left out.
+- With Auto-select on in Claude Code, the model's `cam_view_image` calls don't ask for permission; your own settings and hooks still apply.
+- The project is renamed from Codex Attachment Manager to Context Attachment Manager, and the repository to `chipfighter/context-attachment-manager`; old links redirect. The install ID (`codex-attachment-manager`) and the data folder stay the same, so upgrading works as before.
+- In Codex, the panel and the requests it sends work as in 0.3.0.
+
+### Notes
+
+- Tested on Windows in Claude Desktop with Claude Code 2.1.295 and Claude Haiku 5.5, in Chinese and English: after images were left out, the model kept its earlier descriptions, asked for images by ID when it needed them, and fetched them itself with Auto-select on. Newer accounts were simulated with Anthropic's own switch for this check.
+- Leaving out earlier thinking has a cost: without its earlier reasoning, the model may think again and use more tokens. In one test, the same follow-up question took 2,422 thinking tokens instead of 29. This happens only on newer accounts, and only to thinking that came after an image you left out.
+- Not tried yet in Claude Desktop: forking, `/compact` and `/rewind`, subagents, uninstalling and reinstalling, restarting the app, a sign-in refresh, and macOS and Linux. Feedback in the issues is welcome.
+- Claude Desktop can't add a plugin marketplace from GitHub by itself yet, so adding this one takes the `claude` command once; see the README. Without Codex installed, the plugin needs Node 24 or later.
+- If `/cam` is the first message of a new session, the prompt box may say the command doesn't exist. Send it anyway: Claude Desktop starts the session with your first message, and the plugin adds `/cam` then.
+
 ## [0.3.0] - 2026-10-06
 
 Let the model pick the images it needs.

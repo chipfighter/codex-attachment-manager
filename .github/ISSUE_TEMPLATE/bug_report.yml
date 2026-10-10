@@ -1,5 +1,5 @@
 name: 问题反馈 / Bug report
-description: 插件装不上、面板打不开、Codex 连不上，或者结果不对 / Something does not work
+description: 插件装不上、面板打不开、Codex 或 Claude 连不上，或者结果不对 / Something does not work
 labels: [bug]
 body:
   - type: markdown
@@ -10,6 +10,15 @@ body:
 
         **Codex 连不上时 / If Codex cannot connect:** 先运行卸载命令恢复直连（见 README 的“卸载”），再来提问题。
         Run the uninstall command from the README first to restore the direct connection.
+        **Claude 连不上时 / If Claude Code cannot connect:** 卸载 Claude 插件后，新会话会直接连接。
+        Uninstall the Claude plugin; new sessions then connect directly.
+  - type: dropdown
+    id: app
+    attributes:
+      label: 应用 / App
+      options: [Codex, Claude Desktop]
+    validations:
+      required: true
   - type: dropdown
     id: platform
     attributes:
@@ -20,15 +29,15 @@ body:
   - type: input
     id: codex
     attributes:
-      label: Codex 版本 / Codex version
-      description: 桌面版的版本号，或者 `codex --version` 的输出 / Desktop app version, or the output of `codex --version`
+      label: 应用版本 / App version
+      description: Codex 桌面版的版本号或 `codex --version` 的输出；Claude 桌面版的版本号或 `claude --version` 的输出 / The desktop app's version, or the output of `codex --version` or `claude --version`
     validations:
       required: true
   - type: input
     id: plugin
     attributes:
       label: 插件版本 / Plugin version
-      placeholder: "0.3.0"
+      placeholder: "0.4.0"
   - type: textarea
     id: what
     attributes:
@@ -41,8 +50,9 @@ body:
     attributes:
       label: 安装状态 / Install status
       description: |
-        `cam status` 的输出（不含凭据）/ Output of `cam status` (it contains no credentials).
-      render: json
+        Codex：`cam status` 的输出（不含凭据）；Claude：`claude plugin list` 的输出。
+        Codex: the output of `cam status` (it contains no credentials). Claude: the output of `claude plugin list`.
+      render: text
   - type: textarea
     id: logs
     attributes:
