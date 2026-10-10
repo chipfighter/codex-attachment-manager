@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { claudeHome, loadClaudeIndex, type ClaudeIndex } from "./claude-index.ts";
 import { findRequestImages, rewriteMessages, type RequestImage } from "./claude-rewrite.ts";
+import { chainOf, fitThinking, readThinkingRecord, rememberSent, writeThinkingRecord, type ThinkingRecord } from "./claude-thinking.ts";
 import { codexHome } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
@@ -322,20 +323,27 @@ export function thinkingRejected(status: number, body: string): boolean {
   return status === 400 && /thinking/i.test(body) && /signature|bound to a different conversation|prefix/i.test(body);
 }
 
+// v0.4: what to send for a Claude Code request, in order: the rewrite; if Anthropic refuses the thinking after the
+// changed history (thinkingRejected), the rewrite without the thinking that no longer fits (claude-thinking.ts); then
+// the original. Once a session's account refused such thinking (thinking.strict), the rewrite goes without it from the
+// start. history/sent: the chains to remember once an attempt goes through.
+export type ClaudeAttempt = { body: Buffer; report: Json; history: string | null; sent: string | null };
+
 // v0.4: the same rules as rewriteBody, for a Claude Code request (Anthropic Messages, claude-rewrite.ts). The current
 // turn is the transcript's latest prompt: Claude Code writes it before it sends the request.
 // CAM_EXPERIMENT_BLOCK_BINDING (experiments only, docs/v0.4/tasks.md T04-01): asks Anthropic to check thinking with
 // that prefix_mismatch_behavior, as for an account created from 2026-08-31; the report names the beta header to add.
-export function rewriteClaudeBody(original: Buffer, encoding: string | undefined, sessionId: string, dir = claudeSelectionDirOf(), home = claudeHome(), env = process.env): { body: Buffer; report: Json } {
+export function rewriteClaudeBody(original: Buffer, encoding: string | undefined, sessionId: string, dir = claudeSelectionDirOf(), home = claudeHome(), env = process.env, thinking: ThinkingRecord | null = null): { body: Buffer; report: Json; attempts: ClaudeAttempt[] } {
+  const asIs = (report: Json) => ({ body: original, report, attempts: [] });
   const decoded = decodeBody(original, encoding);
-  if (!decoded) return { body: original, report: { skipped: "undecodable body" } };
+  if (!decoded) return asIs({ skipped: "undecodable body" });
   const text = decoded.toString("utf8");
   let json: Json;
-  try { json = JSON.parse(text); } catch { return { body: original, report: { skipped: "unparsable body" } }; }
-  if (!Array.isArray(json.messages)) return { body: original, report: { skipped: "no messages array" } };
-  if (hasUnsafeInteger(text)) return { body: original, report: { skipped: "integer beyond 2^53 would change when re-serialized" } };
+  try { json = JSON.parse(text); } catch { return asIs({ skipped: "unparsable body" }); }
+  if (!Array.isArray(json.messages)) return asIs({ skipped: "no messages array" });
+  if (hasUnsafeInteger(text)) return asIs({ skipped: "integer beyond 2^53 would change when re-serialized" });
   let index: ClaudeIndex;
-  try { index = loadClaudeIndex(sessionId, home); } catch (error) { return { body: original, report: { skipped: `thread index: ${String(error)}` } }; }
+  try { index = loadClaudeIndex(sessionId, home); } catch (error) { return asIs({ skipped: `thread index: ${String(error)}` }); }
   const selection = readSelection(sessionId, dir);
   const current = index.turns;
   const copies = new Map([...index.copies.values()].filter((copy) => copy.turn === null || copy.turn < current).map((copy) => [copy.key, copy.of]));
@@ -356,16 +364,25 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
     ...(selection.auto ? { auto: true } : {}),
     ...(report.copies.length ? { copies: report.copies } : {}),
   };
-  if (!report.replaced.length && !report.copies.length) return { body: original, report: summary };
-  json.messages = messages;
+  const changed = report.replaced.length > 0 || report.copies.length > 0;
+  const rewritten = changed ? messages : json.messages;
+  // Thinking made after an earlier edit may not fit even when nothing is left out now (an image checked again).
+  const fit = thinking ? fitThinking(json.messages, rewritten, thinking.sent) : null;
+  if (!changed && !(thinking?.strict && fit?.left)) return { body: original, report: summary, attempts: [] };
   const experiment = env.CAM_EXPERIMENT_BLOCK_BINDING?.trim();
-  if (experiment && json.thinking && typeof json.thinking === "object") {
-    json.thinking = { ...json.thinking, block_binding: { prefix_mismatch_behavior: experiment } };
-    summary.experiment = { blockBinding: experiment, beta: "thinking-binding-controls-2026-08-01" };
-  }
-  const next = Buffer.from(JSON.stringify(json), "utf8");
-  const body = encodeBody(next, encoding);
-  return { body, report: { ...summary, decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
+  const encode = (list: Json[], extra: Json) => {
+    const out: Json = { ...json, messages: list };
+    const asked = experiment && json.thinking && typeof json.thinking === "object";
+    if (asked) out.thinking = { ...json.thinking, block_binding: { prefix_mismatch_behavior: experiment } };
+    const next = Buffer.from(JSON.stringify(out), "utf8");
+    const body = encodeBody(next, encoding);
+    return { body, report: { ...summary, ...extra, ...(asked ? { experiment: { blockBinding: experiment, beta: "thinking-binding-controls-2026-08-01" } } : {}), decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
+  };
+  const attempts: ClaudeAttempt[] = [];
+  if (!thinking?.strict) attempts.push({ ...encode(rewritten, {}), history: fit?.history ?? null, sent: fit ? (fit.left ? chainOf(rewritten) : fit.sent) : null });
+  if (fit && (thinking?.strict || fit.left)) attempts.push({ ...encode(fit.messages, { thinking: { kept: fit.kept, left: fit.left }, ...(thinking?.strict ? {} : { retry: "thinking-signature" }) }), history: fit.history, sent: fit.sent });
+  attempts.push({ body: original, report: { ...summary, fallback: "thinking-signature" }, history: fit?.history ?? null, sent: fit?.history ?? null });
+  return { body: attempts[0].body, report: attempts[0].report, attempts };
 }
 
 // v0.4: a Claude Code session's panel reads and changes its images here: the panel page the engine serves
@@ -442,6 +459,16 @@ async function main(): Promise<void> {
   const build = buildOf();
   const version = versionOf();
   let sequence = 0;
+  // v0.4: per Claude Code session, whether its account refuses thinking after a changed history and what was sent
+  // (claude-thinking.ts); the latest sessions stay in memory.
+  const thinkingRecords = new Map<string, ThinkingRecord>();
+  const thinkingOf = (sessionId: string): ThinkingRecord => {
+    const record = thinkingRecords.get(sessionId) ?? readThinkingRecord(sessionId);
+    thinkingRecords.delete(sessionId);
+    thinkingRecords.set(sessionId, record);
+    for (const key of thinkingRecords.keys()) if (thinkingRecords.size > 50) thinkingRecords.delete(key);
+    return record;
+  };
   log({ at: startedAt, event: "engine-start", pid: process.pid, port, build, version });
   if (!process.argv.includes("--stay")) {
     // v0.1-5: a plugin removed or turned off without 停用 leaves Codex pointed at an engine nothing will start again.
@@ -566,7 +593,10 @@ async function main(): Promise<void> {
     // Codex thread's once something is unchecked there.
     const claude = upstream === CLAUDE_HOST ? claudeIdentity(req.headers) : null;
     const claudeSession = claude?.sessionId && !claude.agentId && req.method === "POST" && path === "/v1/messages" ? claude.sessionId : null;
-    const claudeRewrite = claudeNeedsRewrite(claudeSession);
+    // Once the session's account refused thinking after a changed history, every request of it is looked at, even with
+    // nothing left out now: thinking made after an edited history no longer fits the history as it was.
+    const thinking = claudeSession ? thinkingOf(claudeSession) : null;
+    const claudeRewrite = claudeNeedsRewrite(claudeSession) || !!(thinking?.strict && thinking.sent.size);
     const claudeFields = claude ? { claudeSessionId: claude.sessionId, claudeAgentId: claude.agentId } : {};
     const chunks: Buffer[] = [];
     let requestBytes = 0;
@@ -576,6 +606,7 @@ async function main(): Promise<void> {
     let extra: Json = {};
     // Synthetic test threads only (--dump-requests): the body as the engine sent it, after a rewrite.
     let sentBody: Buffer | null = null;
+    const dumpName = (suffix: string) => join(dumpDir!, `${new Date(started).toISOString().replaceAll(":", "-")}-${id}${suffix}`);
     const collect = () => req.on("data", (chunk: Buffer) => { chunks.push(chunk); requestBytes += chunk.length; });
     const finish = (error?: string) => {
       if (finished) return;
@@ -605,16 +636,24 @@ async function main(): Promise<void> {
       if (/\/responses$/.test(path)) recordRequest(identity.threadId, imageSizes ? { ...entry, imageSizes } : entry);
       if (claudeSession && claudeConversationRequest(details)) recordRequest(claudeSession, imageSizes ? { ...entry, imageSizes } : entry, claudeRequestStatsDirOf());
     };
-    // body === null streams the request through unchanged. v0.4: with `fallback` (the original body of a rewritten
-    // Claude Code request), Anthropic refusing the rewritten history under its thinking (thinkingRejected) sends the
-    // original instead: the request goes out as Claude Code built it, and the statistics say why (the panel shows it).
-    const send = (headers: Record<string, string | string[]>, body: Buffer | null, fallback: Buffer | null = null) => connectUpstream(viaOf(upstream), upstream).then((socket) => {
+    // What to send, in order: body null streams the request through unchanged. v0.4: Anthropic refusing an attempt's
+    // thinking after the changed history (thinkingRejected) moves on to the next one (see ClaudeAttempt), the last being
+    // the original as Claude Code built it; the statistics say which went out (the panel shows a fallback).
+    type Attempt = { body: Buffer | null; report: Json | null; edited: boolean; history?: string | null; sent?: string | null };
+    const send = (attempts: Attempt[], at = 0): void => { connectUpstream(viaOf(upstream), upstream).then((socket) => {
+      const attempt = attempts[at];
+      const outgoing = forwardHeaders(req.headers, upstream);
+      if (attempt.body) outgoing["content-length"] = String(attempt.body.length);
+      const beta = attempt.report?.experiment?.beta;
+      if (beta) outgoing["anthropic-beta"] = [String(outgoing["anthropic-beta"] ?? ""), beta].filter(Boolean).join(",");
+      if (attempt.report) extra = { ...extra, rewrite: attempt.report };
+      if (dumpDir) sentBody = attempt.edited ? attempt.body : null;
       // No `agent` option: with agent:false Node ignores createConnection and dials the host directly.
-      const outbound = http.request({ host: upstream, method: req.method, path: req.url, headers, createConnection: () => socket }, (answer) => {
+      const outbound = http.request({ host: upstream, method: req.method, path: req.url, headers: outgoing, createConnection: () => socket }, (answer) => {
         status = answer.statusCode ?? 0;
         const headers: Record<string, string | string[]> = {};
         for (const [name, value] of Object.entries(answer.headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) headers[name] = value;
-        if (fallback && status === 400) {
+        if (at < attempts.length - 1 && status === 400) {
           const parts: Buffer[] = [];
           answer.on("data", (chunk: Buffer) => parts.push(chunk));
           answer.on("error", (error) => finish(String(error)));
@@ -622,10 +661,15 @@ async function main(): Promise<void> {
             const raw = Buffer.concat(parts);
             const text = decodeBody(raw, answer.headers["content-encoding"] as string | undefined)?.toString("utf8") ?? "";
             if (thinkingRejected(status, text)) {
-              extra = { ...extra, rewrite: { ...extra.rewrite, fallback: "thinking-signature", rejectedStatus: status } };
-              const again = { ...forwardHeaders(req.headers, upstream), "content-length": String(fallback.length) };
+              extra = { ...extra, rejected: [...(extra.rejected ?? []), status] };
+              if (dumpDir) { try { writeFileSync(dumpName(`.rejected-${at}.json`), text); } catch { /* experiments only */ } }
+              // The account checks thinking: from now on the session's rewrites leave out what no longer fits.
+              if (thinking && claudeSession && attempt.history && !thinking.strict) {
+                thinking.strict = true;
+                try { writeThinkingRecord(claudeSession, thinking); } catch { /* kept in memory */ }
+              }
               socket.destroy();
-              send(again, fallback);
+              send(attempts, at + 1);
               return;
             }
             res.writeHead(status, headers);
@@ -635,36 +679,45 @@ async function main(): Promise<void> {
           });
           return;
         }
+        // The thinking the model makes now comes after what this attempt sent.
+        if (status >= 200 && status < 300 && thinking && claudeSession && attempt.history && attempt.sent) {
+          rememberSent(thinking, attempt.history, attempt.sent);
+          try { writeThinkingRecord(claudeSession, thinking); } catch { /* kept in memory */ }
+        }
         res.writeHead(status, headers);
-        answer.on("data", (chunk: Buffer) => { responseBytes += chunk.length; });
+        // Experiments only (--dump-requests): the response too, for its usage and what Anthropic changed.
+        const captured: Buffer[] = [];
+        answer.on("data", (chunk: Buffer) => { responseBytes += chunk.length; if (dumpDir && claudeSession && responseBytes <= 8 * 1024 * 1024) captured.push(chunk); });
         answer.pipe(res);
-        answer.on("end", () => finish());
+        answer.on("end", () => {
+          if (captured.length) {
+            const raw = Buffer.concat(captured);
+            try { writeFileSync(dumpName(".response.txt"), decodeBody(raw, answer.headers["content-encoding"] as string | undefined) ?? raw); } catch { /* experiments only */ }
+          }
+          finish();
+        });
         answer.on("error", (error) => finish(String(error)));
       });
       outbound.on("error", (error) => { if (!res.headersSent) res.writeHead(502); res.end(); finish(String(error)); });
       // Codex may drop the connection mid-stream; still log the request once.
       res.on("close", () => finish(res.writableFinished ? undefined : "client closed before the response ended"));
-      if (body) outbound.end(body);
+      if (attempt.body) outbound.end(attempt.body);
       else { collect(); req.pipe(outbound); }
     }, (error) => {
       res.writeHead(502, { "content-type": "text/plain" });
       res.end(`codex-attachment-manager proxy: cannot reach ${upstream}`);
       finish(String(error));
-    });
-    if (!rewrite && !claudeRewrite) { send(forwardHeaders(req.headers, upstream), null); return; }
+    }); };
+    if (!rewrite && !claudeRewrite) { send([{ body: null, report: null, edited: false }]); return; }
     collect();
     req.on("end", () => {
       const original = Buffer.concat(chunks);
       const encoding = req.headers["content-encoding"] as string | undefined;
-      let out: { body: Buffer; report: Json };
-      try { out = claudeRewrite ? rewriteClaudeBody(original, encoding, claudeSession!) : rewriteBody(original, encoding, identity.threadId!, sessionsDir, selectionDir, identity.turnId); }
+      let out: { body: Buffer; report: Json; attempts?: ClaudeAttempt[] };
+      try { out = claudeRewrite ? rewriteClaudeBody(original, encoding, claudeSession!, undefined, undefined, undefined, thinking) : rewriteBody(original, encoding, identity.threadId!, sessionsDir, selectionDir, identity.turnId); }
       catch (error) { out = { body: original, report: { skipped: `rewrite failed: ${String(error)}` } }; }
-      extra = { rewrite: out.report };
-      if (dumpDir && out.body !== original) sentBody = out.body;
-      const headers = forwardHeaders(req.headers, upstream);
-      headers["content-length"] = String(out.body.length);
-      if (out.report.experiment?.beta) headers["anthropic-beta"] = [String(headers["anthropic-beta"] ?? ""), out.report.experiment.beta].filter(Boolean).join(",");
-      send(headers, out.body, claudeRewrite && out.body !== original ? original : null);
+      const attempts: Attempt[] = out.attempts?.length ? out.attempts.map((attempt) => ({ ...attempt, edited: attempt.body !== original })) : [{ body: out.body, report: out.report, edited: out.body !== original }];
+      send(attempts);
     });
   };
 

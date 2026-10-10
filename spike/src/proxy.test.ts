@@ -229,9 +229,50 @@ test("a Claude Code request is rewritten from the session's transcript and selec
   const experiment = rewriteClaudeBody(body, undefined, session, dir, home, { CAM_EXPERIMENT_BLOCK_BINDING: "error" });
   assert.deepEqual(JSON.parse(experiment.body.toString("utf8")).thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "error" } });
   assert.equal(experiment.report.experiment.beta, "thinking-binding-controls-2026-08-01");
+  // What to send in turn: the rewrite, then the original as Claude Code built it.
+  assert.deepEqual(out.attempts.map((attempt: any) => [attempt.body === body, attempt.report.fallback ?? null]), [[false, null], [true, "thinking-signature"]]);
   // Image sizes by key, as the panel's baseline.
   const sizes = claudeImageSizes(usualRequest(), buildClaudeIndex(session, t.records));
   assert.deepEqual(Object.keys(sizes).length, 4);
+});
+
+test("an account that refuses thinking after an edited history gets the rewrite without the thinking that no longer fits", async () => {
+  const { usualSession, usualRequest, text } = await import("./claude-fixtures.ts");
+  const { rewriteClaudeBody } = await import("../../plugin/src/proxy.ts");
+  const { rememberSent } = await import("../../plugin/src/claude-thinking.ts");
+  const home = mkdtempSync(join(tmpdir(), "cam-claude-home-"));
+  const dir = mkdtempSync(join(tmpdir(), "cam-claude-sel-"));
+  const session = "11111111-2222-4333-8444-555555555555";
+  const { t, p1 } = usualSession();
+  mkdirSync(join(home, "projects", "D--work"), { recursive: true });
+  writeFileSync(join(home, "projects", "D--work", `${session}.jsonl`), t.records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  const body = Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", thinking: { type: "adaptive" }, messages: usualRequest() }));
+  writeSelection({ threadId: session, unchecked: { [`${p1}#1`]: { id: "IMG-002", at: "2026-10-10T00:00:00Z" } } }, dir);
+  const record = { strict: false, sent: new Map<string, string>() };
+  // Not known yet: the rewrite as it is, then without the thinking after the placeholder, then the original.
+  const first = rewriteClaudeBody(body, undefined, session, dir, home, {}, record);
+  assert.deepEqual(first.attempts.map((attempt: any) => [attempt.report.retry ?? null, attempt.report.fallback ?? null, attempt.report.thinking ?? null]), [
+    [null, null, null],
+    ["thinking-signature", null, { kept: 0, left: 1 }],
+    [null, "thinking-signature", null],
+  ]);
+  const fitted = JSON.parse(first.attempts[1].body.toString("utf8")).messages;
+  assert.equal(fitted[1].role, "system");
+  assert.deepEqual(fitted[2].content.map((block: any) => block.type), ["text"]);
+  // Known: that rewrite first.
+  record.strict = true;
+  const strict = rewriteClaudeBody(body, undefined, session, dir, home, {}, record);
+  assert.deepEqual(strict.attempts.map((attempt: any) => attempt.report.thinking?.left ?? null), [1, null]);
+  rememberSent(record, strict.attempts[0].history!, strict.attempts[0].sent!);
+  // The next request carries thinking made after that; with the image checked again it no longer fits, while the
+  // thinking made before the edit fits again.
+  const next = [...usualRequest(), { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "sig-9" }, text("Blue.")] }, { role: "user", content: [text("More?")] }];
+  writeSelection({ threadId: session, unchecked: {} }, dir);
+  const again = rewriteClaudeBody(Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", thinking: { type: "adaptive" }, messages: next })), undefined, session, dir, home, {}, record);
+  assert.deepEqual(again.attempts.map((attempt: any) => attempt.report.thinking ?? null), [{ kept: 1, left: 1 }, null]);
+  const sent = JSON.parse(again.attempts[0].body.toString("utf8")).messages;
+  assert.deepEqual(sent[1].content.map((block: any) => block.type), ["thinking", "text"]);
+  assert.deepEqual(sent[9].content.map((block: any) => block.type), ["text"]);
 });
 
 test("Anthropic refusing the thinking after an edited history is told apart from other 400s", async () => {
