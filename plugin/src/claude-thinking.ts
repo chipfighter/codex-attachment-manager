@@ -19,10 +19,22 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 // Hashes of the latest histories only: a block is made after the history of the request just before it.
 const KEEP = 2000;
 
-// Cache breakpoints move from request to request; thinking is not bound to them.
-const withoutBreakpoints = (key: string, value: unknown) => (key === "cache_control" ? undefined : value);
+// What Anthropic compares: values, not JSON formatting or key order; content given as a string is the text block it
+// stands for (Claude Code sends its trailing system message as a block with a cache breakpoint, and as a string in the
+// requests after); cache breakpoints move from request to request.
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  const out: Json = {};
+  for (const key of Object.keys(value).sort()) {
+    const field = (value as Json)[key];
+    if (key === "cache_control") continue;
+    out[key] = key === "content" && typeof field === "string" ? [{ text: field, type: "text" }] : canonical(field);
+  }
+  return out;
+}
 export const link = (previous: string, message: Json): string =>
-  createHash("sha256").update(previous).update("\n").update(JSON.stringify(message, withoutBreakpoints) ?? "").digest("hex");
+  createHash("sha256").update(previous).update("\n").update(JSON.stringify(canonical(message)) ?? "").digest("hex");
 export const chainOf = (messages: Json[]): string => messages.reduce((chain: string, message) => link(chain, message), "");
 
 const thinkingIn = (message: Json): number =>

@@ -71,10 +71,17 @@ test("an edit after a thinking block leaves that block alone", () => {
   assert.deepEqual(fit.messages[1], s.a1);
 });
 
-test("cache breakpoints are not part of the history; a message of thinking alone is not emptied", () => {
+test("cache breakpoints, key order and string content are not part of the history; a message of thinking alone is not emptied", () => {
   const s = session();
   const moved = [s.m0, s.a1, s.m2, s.a3, user(text("Next.", { cache_control: { type: "ephemeral" } }))];
   assert.equal(chainOf(moved), chainOf(s.original));
+  // Claude Code 2.1.295: its trailing system message is a block with a breakpoint while it is last, a string after.
+  const last = { role: "system", content: [text("<total_tokens>1 tokens left</total_tokens>", { cache_control: { type: "ephemeral" } })] };
+  const later = { content: "<total_tokens>1 tokens left</total_tokens>", role: "system" };
+  assert.equal(chainOf([s.m0, last]), chainOf([s.m0, later]));
+  const result = (content: unknown) => user({ type: "tool_result", tool_use_id: "toolu_1", content });
+  assert.equal(chainOf([result("done")]), chainOf([result([{ type: "text", text: "done" }])]));
+  assert.notEqual(chainOf([s.m0, later]), chainOf([s.m0, { ...later, content: "<total_tokens>2 tokens left</total_tokens>" }]));
   const alone = assistant(think("s9"));
   const fit = fitThinking([s.m0, alone], [...omitted(s.m0), alone], new Map());
   assert.deepEqual([fit.kept, fit.left], [1, 0]);
