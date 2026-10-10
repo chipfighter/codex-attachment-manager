@@ -379,9 +379,14 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
     return { body, report: { ...summary, ...extra, ...(asked ? { experiment: { blockBinding: experiment, beta: "thinking-binding-controls-2026-08-01" } } : {}), decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
   };
   const attempts: ClaudeAttempt[] = [];
-  if (!thinking?.strict) attempts.push({ ...encode(rewritten, {}), history: fit?.history ?? null, sent: fit ? (fit.left ? chainOf(rewritten) : fit.sent) : null });
-  if (fit && (thinking?.strict || fit.left)) attempts.push({ ...encode(fit.messages, { thinking: { kept: fit.kept, left: fit.left }, ...(thinking?.strict ? {} : { retry: "thinking-signature" }) }), history: fit.history, sent: fit.sent });
-  attempts.push({ body: original, report: { ...summary, fallback: "thinking-signature" }, history: fit?.history ?? null, sent: fit?.history ?? null });
+  const add = (list: Json[], extra: Json, history: string | null, sent: string | null) => attempts.push({ ...encode(list, extra), history, sent });
+  if (changed && !thinking?.strict) add(rewritten, {}, fit?.history ?? null, fit ? chainOf(rewritten) : null);
+  if (changed && fit && (thinking?.strict || fit.left)) add(fit.messages, { thinking: { kept: fit.kept, left: fit.left }, ...(thinking?.strict ? {} : { retry: "thinking-signature" }) }, fit.history, fit.sent);
+  // Then the original as Claude Code built it, without the thinking made while the engine had changed the history
+  // before it: on an account that checks thinking, that no longer fits the original either.
+  const back = !thinking ? null : changed ? fitThinking(json.messages, json.messages, thinking.sent) : fit;
+  if (back?.left) add(back.messages, { thinking: { kept: back.kept, left: back.left }, ...(changed ? { fallback: "thinking-signature" } : {}) }, back.history, back.sent);
+  attempts.push({ body: original, report: { ...summary, fallback: "thinking-signature" }, history: back?.history ?? null, sent: back?.history ?? null });
   return { body: attempts[0].body, report: attempts[0].report, attempts };
 }
 

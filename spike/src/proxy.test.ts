@@ -273,6 +273,19 @@ test("an account that refuses thinking after an edited history gets the rewrite 
   const sent = JSON.parse(again.attempts[0].body.toString("utf8")).messages;
   assert.deepEqual(sent[1].content.map((block: any) => block.type), ["thinking", "text"]);
   assert.deepEqual(sent[9].content.map((block: any) => block.type), ["text"]);
+  // Another image unchecked: should that rewrite be refused, the original goes without the thinking made while the
+  // engine had changed the history (it no longer fits the original), and only then as Claude Code built it.
+  writeSelection({ threadId: session, unchecked: { [`${p1}#0`]: { id: "IMG-001", at: "2026-10-10T00:00:00Z" } } }, dir);
+  const other = rewriteClaudeBody(Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", thinking: { type: "adaptive" }, messages: next })), undefined, session, dir, home, {}, record);
+  assert.deepEqual(other.attempts.map((attempt: any) => [attempt.report.fallback ?? null, attempt.report.thinking ?? null]), [
+    [null, { kept: 0, left: 2 }],
+    ["thinking-signature", { kept: 1, left: 1 }],
+    ["thinking-signature", null],
+  ]);
+  const back = JSON.parse(other.attempts[1].body.toString("utf8")).messages;
+  assert.equal(back.length, next.length);
+  assert.deepEqual(back[1].content.map((block: any) => block.type), ["thinking", "text"]);
+  assert.deepEqual(back[8].content.map((block: any) => block.type), ["text"]);
 });
 
 test("Anthropic refusing the thinking after an edited history is told apart from other 400s", async () => {
