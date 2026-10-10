@@ -6,7 +6,7 @@ Security fixes go into the latest release only.
 
 ## Reporting a vulnerability
 
-Please don't report security problems in public issues. Use GitHub's private vulnerability reporting instead: on the repository's **Security** tab, click **Report a vulnerability**, or go straight to [the report form](https://github.com/chipfighter/codex-attachment-manager/security/advisories/new). Only you and the maintainer can see the report.
+Please don't report security problems in public issues. Use GitHub's private vulnerability reporting instead: on the repository's **Security** tab, click **Report a vulnerability**, or go straight to [the report form](https://github.com/chipfighter/context-attachment-manager/security/advisories/new). Only you and the maintainer can see the report.
 
 Please include what you found, how to reproduce it, and the plugin version and platform you used.
 

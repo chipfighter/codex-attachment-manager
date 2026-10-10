@@ -229,9 +229,66 @@ test("a Claude Code request is rewritten from the session's transcript and selec
   const experiment = rewriteClaudeBody(body, undefined, session, dir, home, { CAM_EXPERIMENT_BLOCK_BINDING: "error" });
   assert.deepEqual(JSON.parse(experiment.body.toString("utf8")).thinking, { type: "adaptive", block_binding: { prefix_mismatch_behavior: "error" } });
   assert.equal(experiment.report.experiment.beta, "thinking-binding-controls-2026-08-01");
+  // What to send in turn: the rewrite, then the original as Claude Code built it.
+  assert.deepEqual(out.attempts.map((attempt: any) => [attempt.body === body, attempt.report.fallback ?? null]), [[false, null], [true, "thinking-signature"]]);
   // Image sizes by key, as the panel's baseline.
   const sizes = claudeImageSizes(usualRequest(), buildClaudeIndex(session, t.records));
   assert.deepEqual(Object.keys(sizes).length, 4);
+});
+
+test("an account that refuses thinking after an edited history gets the rewrite without the thinking that no longer fits", async () => {
+  const { usualSession, usualRequest, text } = await import("./claude-fixtures.ts");
+  const { rewriteClaudeBody } = await import("../../plugin/src/proxy.ts");
+  const { newThinkingRecord, recordSent } = await import("../../plugin/src/claude-thinking.ts");
+  const home = mkdtempSync(join(tmpdir(), "cam-claude-home-"));
+  const dir = mkdtempSync(join(tmpdir(), "cam-claude-sel-"));
+  const session = "11111111-2222-4333-8444-555555555555";
+  const { t, p1 } = usualSession();
+  mkdirSync(join(home, "projects", "D--work"), { recursive: true });
+  writeFileSync(join(home, "projects", "D--work", `${session}.jsonl`), t.records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  // Claude Code's main loop: the conversation, with its tools.
+  const request = (messages: any[]) => Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", thinking: { type: "adaptive" }, tools: [{ name: "Read", input_schema: { type: "object" } }], messages }));
+  const body = request(usualRequest());
+  writeSelection({ threadId: session, unchecked: { [`${p1}#1`]: { id: "IMG-002", at: "2026-10-10T00:00:00Z" } } }, dir);
+  const record = newThinkingRecord();
+  const steps = (out: any) => out.attempts.map((attempt: any) => [attempt.report.retry ?? null, attempt.report.fallback ?? null, attempt.report.thinking ?? null]);
+  // Not known yet: the rewrite as it is, then without the thinking after the placeholder, then the original.
+  const first = rewriteClaudeBody(body, undefined, session, dir, home, {}, record);
+  assert.deepEqual(steps(first), [
+    [null, null, null],
+    ["thinking-signature", null, { kept: 0, left: 1 }],
+    [null, "thinking-signature", null],
+  ]);
+  const fitted = JSON.parse(first.attempts[1].body.toString("utf8")).messages;
+  assert.equal(fitted[1].role, "system");
+  assert.deepEqual(fitted[2].content.map((block: any) => block.type), ["text"]);
+  // Known: that rewrite first.
+  record.strict = true;
+  const strict = rewriteClaudeBody(body, undefined, session, dir, home, {}, record);
+  assert.deepEqual(steps(strict), [[null, null, { kept: 0, left: 1 }], [null, "thinking-signature", null]]);
+  const went = strict.attempts[0];
+  recordSent(record, went.history!, went.sent!, went.made);
+  // The next request carries thinking made after that; with the image checked again it no longer fits, while the
+  // thinking made before the edit fits again. Should the record be wrong, the request goes without any thinking.
+  const next = [...usualRequest(), { role: "assistant", content: [{ type: "thinking", thinking: "", signature: "sig-9" }, text("Blue.")] }, { role: "user", content: [text("More?")] }];
+  writeSelection({ threadId: session, unchecked: {} }, dir);
+  const again = rewriteClaudeBody(request(next), undefined, session, dir, home, {}, record);
+  assert.deepEqual(steps(again), [[null, null, { kept: 1, left: 1 }], ["thinking-signature", null, { kept: 0, left: 2 }], [null, null, null]]);
+  assert.deepEqual(again.attempts.map((attempt: any) => attempt.sure), [true, false, false]);
+  const sent = JSON.parse(again.attempts[0].body.toString("utf8")).messages;
+  assert.deepEqual(sent[1].content.map((block: any) => block.type), ["thinking", "text"]);
+  assert.deepEqual(sent[9].content.map((block: any) => block.type), ["text"]);
+  // An account not known to check: the request as Claude Code built it first.
+  const lenient = rewriteClaudeBody(request(next), undefined, session, dir, home, {}, { ...record, strict: false });
+  assert.deepEqual(steps(lenient), [[null, null, null], ["thinking-signature", null, { kept: 1, left: 1 }], ["thinking-signature", null, { kept: 0, left: 2 }]]);
+  assert.equal(lenient.attempts[0].body.equals(request(next)), true);
+  // Another image unchecked: nothing made so far fits.
+  writeSelection({ threadId: session, unchecked: { [`${p1}#0`]: { id: "IMG-001", at: "2026-10-10T00:00:00Z" } } }, dir);
+  const other = rewriteClaudeBody(request(next), undefined, session, dir, home, {}, record);
+  assert.deepEqual(steps(other), [[null, null, { kept: 0, left: 2 }], [null, "thinking-signature", null]]);
+  // Side requests (no tools) are not the conversation: nothing of them is remembered.
+  const side = rewriteClaudeBody(Buffer.from(JSON.stringify({ model: "claude-haiku-5-5", messages: next })), undefined, session, dir, home, {}, record);
+  assert.deepEqual(side.attempts.map((attempt: any) => attempt.history), [null, null]);
 });
 
 test("Anthropic refusing the thinking after an edited history is told apart from other 400s", async () => {

@@ -33,7 +33,8 @@
   (sent every turn; kept apart from the manual ticks), the others are left out unless the model fetches them, the bar
   lists what the model fetched in the latest turn instead of what it asked for, and those rows say so.
   v0.4: under Claude Code, when Anthropic refused the rewritten history under its thinking and the engine sent the
-  original request, the panel says so as for any request it could not rewrite.
+  original request, the panel says so as for any request it could not rewrite. On an account that checks thinking, it
+  also says how many thinking records the last request left out to keep the selection (user 2026-10-11).
 -->
 <style>
   /* Fallbacks follow Codex's own widget palette; inside Codex its theme variables (MCP Apps host styles) win. */
@@ -354,6 +355,7 @@
       "notice.engineDown": "代理没有在运行，取消勾选暂时不会生效。关掉 Codex 再打开，一般就能恢复。",
       "notice.skipped": "上一次请求（{time}）没能按勾选替换，图片原样发给了模型。原因：{reason}。",
       "notice.websocket": "取消勾选时这一轮对话还在进行，这一轮剩下的请求仍带着原图；从下一条消息起生效。",
+      "notice.thinking": "这个账号会校验思考记录：上一次请求（{time}）去掉了 {count} 段和现在的勾选对不上的思考记录，模型可能要重新思考，多用一些 token。",
       "reason.undecodable": "请求内容无法解压",
       "reason.unparsable": "请求内容无法解析",
       "reason.format": "请求的格式和预期不同",
@@ -464,6 +466,8 @@
       "notice.engineDown": "The proxy is not running, so unchecking has no effect for now. Closing and reopening Codex usually brings it back.",
       "notice.skipped": "The last request ({time}) could not be rewritten as selected; the images went to the model as they were. Reason: {reason}.",
       "notice.websocket": "This turn was still running when you unchecked images, so its remaining requests still carry the originals; the change applies from the next message.",
+      "notice.thinking": "This account checks thinking records: the last request ({time}) left out {count} thinking records that no longer match the selection, so the model may think again and use more tokens.",
+      "notice.thinking_one": "This account checks thinking records: the last request ({time}) left out {count} thinking record that no longer matches the selection, so the model may think again and use more tokens.",
       "reason.undecodable": "the request could not be decompressed",
       "reason.unparsable": "the request could not be parsed",
       "reason.format": "the request is not in the expected format",
@@ -1213,6 +1217,7 @@
     const sendNotice = S.data?.send?.notice;
     if (sendNotice?.kind === "skipped") nodes.push(notice("error", t("notice.skipped", { time: timeOf(sendNotice.at), reason: t(MESSAGES[lang][`reason.${sendNotice.reason}`] ? `reason.${sendNotice.reason}` : "reason.other") })));
     if (sendNotice?.kind === "fallback") nodes.push(notice("error", t("notice.skipped", { time: timeOf(sendNotice.at), reason: t("reason.thinking") })));
+    if (sendNotice?.kind === "thinking") nodes.push(notice("info", t("notice.thinking", { time: timeOf(sendNotice.at), count: sendNotice.count })));
     if (sendNotice?.kind === "websocket") nodes.push(notice("warn", t("notice.websocket")));
     const list = images();
     if (S.data && !list.length) nodes.push(emptyState);

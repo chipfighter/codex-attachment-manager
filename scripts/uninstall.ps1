@@ -1,6 +1,6 @@
 # Purpose: v0.1-5 - remove the Codex attachment manager on Windows in one line; also the way back when Codex cannot
 # connect because the plugin was removed without turning it off in the panel first:
-#   irm https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/uninstall.ps1 | iex
+#   irm https://github.com/chipfighter/context-attachment-manager/releases/latest/download/uninstall.ps1 | iex
 # Takes out only the marked blocks this tool wrote to config.toml and .env (config.toml is backed up first), then removes
 # the plugin and its marketplace with Codex's own command line. Needs neither Node nor any of the plugin's files.
 # Input: CODEX_HOME, CAM_DATA_DIR, CODEX_CLI_PATH. Output: config.toml, .env, Codex's plugin cache.

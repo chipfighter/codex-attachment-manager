@@ -38,8 +38,10 @@ export type SendInfo = {
   // What the engine sent for that request.
   last: { at: string; bytesBefore: number; bytesAfter: number; replaced: number; skipped: boolean } | null;
   // v0.4: "fallback": Anthropic refused the rewritten history under its thinking, so the engine sent the original
-  // (claude-rewrite.ts): what the user unchecked went out that time.
-  notice: { kind: "skipped"; at: string; reason: SkipReason } | { kind: "websocket"; at: string } | { kind: "fallback"; at: string } | null;
+  // (claude-rewrite.ts): what the user unchecked went out that time. "thinking": the account checks thinking, and the
+  // engine left out `count` thinking records that no longer fit the history as sent (claude-thinking.ts); the model may
+  // think again.
+  notice: { kind: "skipped"; at: string; reason: SkipReason } | { kind: "websocket"; at: string } | { kind: "fallback"; at: string } | { kind: "thinking"; at: string; count: number } | null;
 };
 // started: the thread has a rollout. A panel opened on a new chat before its first message may be tied to a thread
 // Codex prepared and then replaced (v0.1-8); that one never gets a rollout.
@@ -73,6 +75,7 @@ export function sendInfo(stats: RequestStats | null): SendInfo {
   else if (latest?.transport === "http" && rewrite?.skipped) {
     notice = { kind: "skipped", at: http!.at, reason: SKIP_REASONS.find(([pattern]) => pattern.test(rewrite.skipped))?.[1] ?? "other" };
   } else if (latest?.transport === "http" && rewrite?.fallback) notice = { kind: "fallback", at: http!.at };
+  else if (latest?.transport === "http" && rewrite?.thinking?.left > 0) notice = { kind: "thinking", at: http!.at, count: rewrite.thinking.left };
   return {
     baseline: http && bytes !== null && http.imageSizes ? { at: http.at, bytes } : null,
     last: http && bytes !== null ? { at: http.at, bytesBefore: bytes, bytesAfter: rewrite?.fallback ? bytes : rewrite?.decodedAfter ?? bytes, replaced: rewrite?.fallback ? 0 : rewrite?.replaced?.length ?? 0, skipped: !!rewrite?.skipped || !!rewrite?.fallback } : null,
