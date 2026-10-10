@@ -51,9 +51,11 @@ const WORDS = {
   },
 }
 
-// What the pane shows, kept between redraws: the routing state, and the engine's short answer about the session.
+// What the pane shows, kept between redraws: the routing state, and the engine's short answer about the session (read
+// when the pane opens, then again after each turn and each /clear or /resume once it has been opened).
 let routingState = null
 let overview = null
+let paneOpened = false
 let copied = false
 
 // The engine's panel API answers in JSON; the header marks a request as the panel's (a browser page cannot send it).
@@ -142,24 +144,34 @@ async function restoreRouting($) {
 
 const panelUrl = (sessionId) => `http://localhost:${ENGINE_PORT}/__cam/panel?session=${encodeURIComponent(sessionId)}`
 
-async function openPane($) {
-  routingState = (await readRouting($)) ?? routingState
-  copied = false
-  await $.ui.open({ id: PANE, title: WORDS.zh.title, focus: true, closeOnEscape: true })
+async function loadOverview($) {
   try {
     const state = await api($, `/__cam/claude/panel?session=${encodeURIComponent(await $.session.id())}`)
-    overview = { lang: state.lang, images: state.totals.images, off: state.totals.unchecked, sessionId: state.threadId }
+    overview = { lang: state.lang, images: state.totals.images, off: state.totals.unchecked }
   } catch {
     overview = null
   }
   await $.ui.invalidate('ui.render')
 }
 
+// New images come with a turn, and /clear or /resume brings another session: the count follows, without holding up
+// the event.
+function reloadOverview($) {
+  if (paneOpened) $.clock.after(0, () => { loadOverview($).catch(() => {}) })
+}
+
+async function openPane($) {
+  routingState = (await readRouting($)) ?? routingState
+  copied = false
+  paneOpened = true
+  await $.ui.open({ id: PANE, title: WORDS.zh.title, focus: true, closeOnEscape: true })
+  await loadOverview($)
+}
+
 async function drawPane($, e) {
   const { Box, Text, Button, Link } = $.ui.resolve(e)
   const w = WORDS[overview?.lang === 'en' ? 'en' : 'zh']
-  const sessionId = overview?.sessionId ?? (await $.session.id())
-  const url = panelUrl(sessionId)
+  const url = panelUrl(await $.session.id())
   const routing = routingState
   const status = routing?.active ? w.routing.on(routing.port) : w.routing[routing?.reason ?? 'waiting'] ?? w.routing.waiting
   return Box({
@@ -199,7 +211,14 @@ export function register(on) {
   // the session state the pane reads is written again for the new session.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     if (routingState) await $.state.set(ROUTING, routingState).catch(() => {})
+    reloadOverview($)
     return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    reloadOverview($)
+    return result
   })
 
   on('session.end', async ($, e, next) => {
