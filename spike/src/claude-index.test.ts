@@ -42,6 +42,38 @@ test("the conversation is the branch the newest message is on; sidechains and at
   assert.deepEqual(index.images.map((entry) => entry.key), [`${p1}#0`, `${p2}#0`]);
 });
 
+test("parallel tool calls: a result hanging off its own call is part of the conversation, in call order", () => {
+  const t = transcript();
+  t.prompt("Read a.png and b.png together, then c.png");
+  const useA = t.assistant({ type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "C:\\work\\a.png" } });
+  const useB = t.assistant({ type: "tool_use", id: "toolu_b", name: "Read", input: { file_path: "C:\\work\\b.png" } });
+  // Claude Code 2.1.293: each result hangs off its own call, and the conversation goes on from the last one.
+  t.toolResult("toolu_a", [image(pngA)], {}, useA);
+  t.toolResult("toolu_b", [image(pngB)], {}, useB);
+  t.assistant({ type: "tool_use", id: "toolu_c", name: "Read", input: { file_path: "C:\\work\\c.png" } });
+  t.toolResult("toolu_c", [image(pngC)]);
+  t.assistant(text("Three images."));
+  assert.deepEqual(buildClaudeIndex("s", t.records).images.map((entry) => [entry.id, entry.key, entry.name]), [
+    ["IMG-001", "tool:toolu_a#0", "a.png"],
+    ["IMG-002", "tool:toolu_b#0", "b.png"],
+    ["IMG-003", "tool:toolu_c#0", "c.png"],
+  ]);
+});
+
+test("a tool result left on an abandoned branch stays out", () => {
+  const t = transcript();
+  t.prompt("first");
+  const a1 = t.assistant(text("ok"));
+  t.prompt("read d.png");
+  const use = t.assistant({ type: "tool_use", id: "toolu_d", name: "Read", input: { file_path: "C:\\work\\d.png" } });
+  t.toolResult("toolu_d", [image(pngA)], {}, use);
+  t.assistant(text("old answer"));
+  // A rewind to the first answer.
+  t.prompt("edited", {}, a1);
+  t.assistant(text("new answer"));
+  assert.deepEqual(buildClaudeIndex("s", t.records).images, []);
+});
+
 test("compaction: the chain goes on across the boundary, and images before it are marked compacted", () => {
   const t = transcript();
   const p1 = t.prompt([image(pngA), text("first")]);

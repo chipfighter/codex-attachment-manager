@@ -95,6 +95,8 @@ export function readTranscript(file: string): ClaudeRecord[] {
 const isMessage = (record: ClaudeRecord) => (record.type === "user" || record.type === "assistant") && typeof record.uuid === "string";
 const isBoundary = (record: ClaudeRecord) => record.type === "system" && (record.subtype === "compact_boundary" || !!record.compactMetadata);
 
+const blocksOf = (record: ClaudeRecord): Json[] => (Array.isArray(record.message?.content) ? record.message.content : []);
+
 // The conversation as it stands: from the newest message (not a subagent's sidechain) back to the start.
 export function activeChain(records: ClaudeRecord[]): ClaudeRecord[] {
   const byUuid = new Map<string, ClaudeRecord>();
@@ -109,7 +111,28 @@ export function activeChain(records: ClaudeRecord[]): ClaudeRecord[] {
     const parent = record.parentUuid ?? (isBoundary(record) ? record.logicalParentUuid : null);
     record = parent ? byUuid.get(parent) : undefined;
   }
-  return chain.reverse();
+  chain.reverse();
+  // Parallel tool calls (Claude Code 2.1.293): each result hangs off its own call's record and the conversation goes
+  // on from the last result, so the others sit off this chain though Claude Code sends them with it. Each result whose
+  // call is on the chain and has no result there joins it right after its call; a result on an abandoned branch
+  // answers a call that is not on the chain and stays out.
+  const calls = new Set<string>();
+  const answered = new Set<string>();
+  for (const record of chain) {
+    for (const block of blocksOf(record)) {
+      if (block?.type === "tool_use") calls.add(String(block.id));
+      if (block?.type === "tool_result") answered.add(String(block.tool_use_id));
+    }
+  }
+  const after = new Map<string, ClaudeRecord[]>();
+  for (const record of records) {
+    if (record.type !== "user" || record.isSidechain || seen.has(record.uuid!) || !record.parentUuid || !seen.has(record.parentUuid)) continue;
+    const results = blocksOf(record).filter((block) => block?.type === "tool_result");
+    if (results.length === 0 || !results.every((block) => calls.has(String(block.tool_use_id)) && !answered.has(String(block.tool_use_id)))) continue;
+    for (const block of results) answered.add(String(block.tool_use_id));
+    after.set(record.parentUuid, [...(after.get(record.parentUuid) ?? []), record]);
+  }
+  return after.size === 0 ? chain : chain.flatMap((record) => [record, ...(after.get(record.uuid!) ?? [])]);
 }
 
 // A prompt the user sent (or a delivery queued as one): not a tool result, not Claude Code's own meta message or a

@@ -29,7 +29,7 @@ export function transcript() {
     records,
     prompt: (content: Json[] | string, extra: Json = {}, parent?: string | null) => add({ type: "user", message: { role: "user", content }, ...extra }, parent),
     assistant: (block: Json, extra: Json = {}, parent?: string | null) => add({ type: "assistant", message: { role: "assistant", content: [block] }, ...extra }, parent),
-    toolResult: (toolUseId: string, content: Json[], extra: Json = {}) => add({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content }] }, toolUseResult: {}, ...extra }),
+    toolResult: (toolUseId: string, content: Json[], extra: Json = {}, parent?: string | null) => add({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content }] }, toolUseResult: {}, ...extra }, parent),
     attachment: () => add({ type: "attachment", attachment: { type: "x" } }),
     boundary: () => add({ type: "system", subtype: "compact_boundary", compactMetadata: {}, logicalParentUuid: last }, null),
     summary: () => add({ type: "user", isCompactSummary: true, message: { role: "user", content: "summary" } }),
