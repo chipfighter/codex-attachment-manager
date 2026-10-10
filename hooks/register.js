@@ -166,14 +166,14 @@ async function drawPane($, e) {
     flexDirection: 'column', rowGap: 1,
     children: [
       Text({ bold: true, children: [w.title] }),
-      Text({ color: routing?.active ? undefined : 'yellow', dimColor: !!routing?.active, children: [status] }),
+      Text(routing?.active ? { dimColor: true, children: [status] } : { color: 'yellow', children: [status] }),
       ...(overview ? [Text({ children: [w.summary(overview.images, overview.off)] })] : []),
       Box({
         flexDirection: 'row', columnGap: 2,
         children: [
           Link({ href: url, label: w.open }),
           Button({ key: 'copy', label: copied ? w.copied : w.copy, onPress: async (press) => {
-            await $.ui.copy({ text: url, surface: press?.surface })
+            await $.ui.copy({ text: url, surface: press.surface })
             copied = true
             await $.ui.invalidate('ui.render')
           } }),
