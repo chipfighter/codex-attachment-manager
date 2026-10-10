@@ -180,10 +180,17 @@ export function describeBody(path: string, json: Json): Json {
       }
     };
     for (const message of messages) visit(message?.content);
-    return { kind: "messages", model: json.model ?? null, messages: messages.length, images, imageBytes, thinkingBlocks, thinking: json.thinking?.type ?? null, stream: json.stream ?? null };
+    return { kind: "messages", model: json.model ?? null, messages: messages.length, images, imageBytes, thinkingBlocks, thinking: json.thinking?.type ?? null, stream: json.stream ?? null, tools: Array.isArray(json.tools) ? json.tools.length : 0 };
   }
   return { kind: "other" };
 }
+
+// v0.4: the requests the panel's "last request" line is about: the session's conversation as the model works on it,
+// Claude Code's main loop, which always carries its tools. Claude Desktop also sends side requests in the session (a
+// status summary while the user is away, auto mode's safety check): no tools and none of the conversation's images.
+// They are rewritten like the rest; only the line leaves them out (2026-10-10: it said "nothing replaced" after a turn
+// whose four images had all been left out).
+export const claudeConversationRequest = (details: Json): boolean => details.kind === "messages" && details.tools > 0;
 
 function log(entry: Json): void {
   const dir = proxyLogDirOf();
@@ -596,7 +603,7 @@ async function main(): Promise<void> {
       log(entry);
       // Image keys go to the per-thread statistics only, not to the log.
       if (/\/responses$/.test(path)) recordRequest(identity.threadId, imageSizes ? { ...entry, imageSizes } : entry);
-      if (claudeSession) recordRequest(claudeSession, imageSizes ? { ...entry, imageSizes } : entry, claudeRequestStatsDirOf());
+      if (claudeSession && claudeConversationRequest(details)) recordRequest(claudeSession, imageSizes ? { ...entry, imageSizes } : entry, claudeRequestStatsDirOf());
     };
     // body === null streams the request through unchanged. v0.4: with `fallback` (the original body of a rewritten
     // Claude Code request), Anthropic refusing the rewritten history under its thinking (thinkingRejected) sends the

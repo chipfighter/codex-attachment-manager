@@ -182,11 +182,24 @@ test("Messages metadata counts images in user messages and tool results, and thi
     ],
   };
   const described = describeBody("/v1/messages", body);
-  assert.deepEqual(described, { kind: "messages", model: "claude-haiku-5-5", messages: 3, images: 2, imageBytes: data.length * 2, thinkingBlocks: 1, thinking: "adaptive", stream: true });
+  assert.deepEqual(described, { kind: "messages", model: "claude-haiku-5-5", messages: 3, images: 2, imageBytes: data.length * 2, thinkingBlocks: 1, thinking: "adaptive", stream: true, tools: 0 });
   assert.ok(!JSON.stringify(described).includes("secret"));
   const redacted = JSON.stringify(redactImages({ ...body, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", data: "A".repeat(400) } }] }] }));
   assert.ok(!redacted.includes("A".repeat(300)));
   assert.match(redacted, /<sha256:[0-9a-f]{16} chars:400>/);
+});
+
+test("the panel's last request is the session's conversation, not Claude Desktop's side requests in it", async () => {
+  const { claudeConversationRequest } = await import("../../plugin/src/proxy.ts");
+  const tool = { name: "Read", description: "", input_schema: { type: "object" } };
+  // Claude Code's main loop: the conversation, with its tools.
+  const main = describeBody("/v1/messages", { model: "claude-sonnet-5-5", stream: true, tools: [tool, tool], messages: [{ role: "user", content: "hi" }] });
+  assert.equal(main.tools, 2);
+  assert.equal(claudeConversationRequest(main), true);
+  // The desktop's status summary while the user is away, or auto mode's safety check: no tools, no images.
+  const summary = describeBody("/v1/messages", { model: "claude-sonnet-5-5", max_tokens: 3072, messages: [{ role: "user", content: "Current state: done" }] });
+  assert.equal(claudeConversationRequest(summary), false);
+  assert.equal(claudeConversationRequest(describeBody("/backend-api/codex/responses", { input: [] })), false);
 });
 
 test("a Claude Code request is rewritten from the session's transcript and selection; nothing to do keeps the bytes", async () => {
