@@ -1,7 +1,7 @@
 # 技术方案
 
 > 目标、约束和验收标准以 [spec.md](spec.md) 为准。本文件说明现在是怎么实现的、为什么这样做。
-> 文中“已查证”的 Codex 行为，都针对桌面版 26.924（自带命令行 0.158），标着 v0.3 的针对 26.930（自带命令行 0.160）；Codex 更新后可能变化。
+> 文中“已查证”的 Codex 行为，都针对桌面版 26.924（自带命令行 0.158），标着 v0.3 的针对 26.930（自带命令行 0.160）；Codex 更新后可能变化。第 12 节的 Claude 行为（v0.4，开发中，未发布）针对 Claude 桌面应用 2.31226，自带 Claude Code 2.1.293。
 > v0.1 开发过程中的调研和排错经过，归档在 [history/v0.1/](history/v0.1/)，其中 plan.md 是当时逐步写成的完整方案。
 
 ## 1. 总体结构
@@ -12,7 +12,7 @@
 2. 引擎按这个任务的勾选，把取消的图换成占位符，再转发给 `chatgpt.com`；
 3. 回复原路返回，由 Codex 照常记进同一个任务。
 
-任务不换，历史和界面都不动，勾选和取消从下一次请求起生效。
+任务不换，历史和界面都不动，勾选和取消从下一次请求起生效。v0.4 起，Claude Code 的请求也经过同一个引擎，转发到 `api.anthropic.com`，见第 12 节。
 
 另一条路线是在新任务里重建历史（阶段 0 验证过，技术上可行）。没有采用，因为用户要在同一个任务里看到连续的对话，见 [history/v0.1/phase0-report.md](history/v0.1/phase0-report.md)。
 
@@ -25,6 +25,9 @@
 | 改写 | `rewrite.ts`、`selection.ts`、`request-stats.ts` | 占位符、说明和标签；勾选状态；请求统计 |
 | 接入和安装 | `codexconfig.ts`、`setup.ts`、`install.ts`、`codexcli.ts`、`cam.ts` | 管理 Codex 配置里带标记的块；用 Codex 的命令行装卸插件；`cam` 命令行 |
 | 其他 | `language.ts`、`messages.ts`、`paths.ts`、`migrate-data.ts`、`binding.ts`、`entry.ts` | 语言、文字表、数据目录、旧数据迁移、新任务绑定 |
+| Claude 接入（v0.4） | `hooks/register.js`（Mod，不在 `plugin/src`） | 把会话的请求地址指向引擎；`/cam` 打开面板；取图工具免确认 |
+| Claude 会话索引和改写（v0.4） | `claude-index.ts`、`claude-rewrite.ts` | 从 Claude Code 的会话记录找图、编号；改写 Anthropic Messages 请求 |
+| 面板页（v0.4） | `panel-web.js` | 引擎把 `panel.html` 作为网页提供时，代替 MCP 应用的宿主 |
 
 引擎和插件服务之间只通过数据目录里的文件共享状态，任何一方不在，另一方都照常工作。
 
@@ -97,9 +100,9 @@
 ## 5. 引擎的生命周期
 
 - **全机一个**：监听 17891 端口（`127.0.0.1` 和 `::1`），`/__cam/health` 报告进程、build（运行目录里 .ts 文件的哈希，换行统一成 LF）和版本。
-- **跟着 Codex**：插件服务启动时确保引擎在运行，之后每隔几秒检查一次，崩了就重新拉起。Codex 全部退出后，引擎自己退出。
+- **跟着 Codex**：插件服务启动时确保引擎在运行，之后每隔几秒检查一次，崩了就重新拉起。Codex 全部退出后，引擎自己退出；v0.4 起 Claude Code 也用这个引擎，要等 Codex 和 Claude 的进程都没有了才退出。
 - **Windows 的 Job**：插件服务在一个“关闭即结束、不许脱离”的 Job 里，它拉起的引擎随它一起结束，其他会话的插件服务会在几秒内重新拉起。macOS、Linux 上引擎用 `setsid` 脱离进程组。
-- **升级时替换**：插件服务发现引擎的代码和自己不同、版本不低，就请旧引擎退役（`/__cam/retire`）：旧引擎立刻停止监听，把正在进行的请求和 WebSocket 这一轮做完再退出，新引擎马上接手端口。
+- **升级时替换**：插件服务发现运行中的引擎版本比自己低，就请旧引擎退役（`/__cam/retire`）：旧引擎立刻停止监听，把正在进行的请求和 WebSocket 这一轮做完再退出，新引擎马上接手端口。版本相同、代码不同时不替换，只有安装命令（`cam install`）强制替换：v0.4 起 Codex 和 Claude 各有一份插件副本，否则两份副本会来回让对方的引擎退役。
 - **插件被移除、没先停用**：引擎每 15 秒检查一次，只认明确的迹象：插件缓存目录不在了，或者 `config.toml` 写着 `enabled = false`。连续两次，或者引擎退出前再查一次，就把 Codex 恢复直连。Windows 上引擎通常随插件服务一起被结束，来不及做这一步，所以面板、插件说明和 README 都写“先停用再移除”，卸载命令负责恢复。
 
 ## 6. 面板
@@ -204,3 +207,42 @@
 - **模型的差别**：小模型在低推理强度下（例如 GPT-6 Luna Light）偶尔会要错图，或者拿到错图时不说“这张里没有”，而是猜一个答案（v0.1-25 的录屏里遇到过）。
   - v0.3 查证：GPT-6 Luna（low）读工具结果里的图，比读用户消息里的图差。同一张图放在消息里问，四次都读对；经 `cam_view_image` 或 Codex 自带的 `view_image` 送来，常把角落的小数字读错（5 读成 3，7 读成 2），有时说看不到数字。把取回的图挪进紧跟着的一条用户消息也没改善，问题在“先调用工具再看图”这个过程，不在图放在哪里。Sol、Astra 没有这个问题。README 和发布说明写明了这一点。
 - **桌面版的上下文比自测多**：桌面版每轮还带着电脑操作、浏览器等插件的工具说明（约 1 万 token）。自测为了不让测试模型操作用户的电脑，没开这些插件，所以个别只在桌面版出现的模型行为，自测复现不出来。
+
+## 12. Claude Code 接入（v0.4，开发中，未发布）
+
+方案、关卡和任务见 [v0.4/plan.md](v0.4/plan.md)。做法是把上面的机制逐块移植，这里写对应的做法和平台逼迫的改动。
+
+- **接入**（`hooks/register.js`，Mod）：
+  - Claude 桌面启动 Code 会话时传入 `ANTHROPIC_BASE_URL`，不认 settings 文件里的同名设置。所以由 Mod 在会话启动（`session.start`）时切换：等引擎回答健康检查、确认它能转发 `api.anthropic.com`，再用 `$.env.set` 把这个 Claude Code 进程的 `ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:17891`，并把本机地址加进 `NO_PROXY`。
+  - 原值存在会话状态里，进程结束（`session.end`，`/clear`、`/resume` 除外）时还原。尽量在第一个请求之前切好；引擎还在启动时，先等几秒，其余时间在后台等。
+  - 已经设了别的服务地址或第三方服务（`CLAUDE_CODE_USE_BEDROCK` 等）的会话不接管。运行中的引擎太旧、不转发 Claude 时也不接管，小面板上提示。
+  - 订阅登录不受影响：引擎把同样的请求头转给 `api.anthropic.com`，不记认证信息。
+- **认出会话**：靠请求头 `x-claude-code-session-id`。子代理的请求另带 `x-claude-code-agent-id`，它们有自己的历史，不按主会话改写。
+- **找图和编号**（`claude-index.ts`）：
+  - 会话记录在 `~/.claude/projects/<项目>/<会话 id>.jsonl`（`CLAUDE_CONFIG_DIR` 可改），只读、增量地读。记录用 `parentUuid` 串成链，从最新一条消息往回走就是当前的对话，撤回、编辑留下的旧分支不算；压缩分界的记录用 `logicalParentUuid` 接上前面的历史。
+  - 并行调用工具时，每个结果挂在自己那条调用记录下面，对话从最后一个结果接着往下走。所以调用在链上、链上又没有它结果的那些结果，补回到调用后面。
+  - 用户贴的图按“记录 uuid + 序号”识别，工具结果里的图按 `tool:<tool_use_id>#序号` 识别。请求里用户消息的图没有 id，按内容依次对齐。
+  - 一轮从用户的一条输入开始：Claude Code 给这条记录标了 `turnPosition`，别的会话发来的消息也算一轮。
+- **改写**（`claude-rewrite.ts`、`proxy.ts`）：
+  - 只改 `/v1/messages`：用户消息里和工具结果里的图换成占位符，文字和 Codex 版相同。
+  - 说明是 `role: "system"` 消息，放在第一张被省略的图所在的那条消息之后；那里已经有系统消息时，并进去。每条含被省略图片的消息后面都跟一条简短说明（`rewrite.ts` 里的 `here`），从后往前插，勾选不变时位置不变。
+  - 思考块原样转发。账号拒绝改过的历史（400，`thinkingRejected`）时，改发原始请求，统计里记下 `fallback`，面板提示。`CAM_EXPERIMENT_BLOCK_BINDING=error` 让老账号也按新账号的方式校验，只用于实验。
+  - 面板的“上一次请求”只记带工具的主对话请求。桌面版还会在会话里发附带请求（用户离开时的状态摘要、自动模式的安全检查）：照样改写，但不记进这一行。
+- **面板**（`proxy.ts`、`panel-web.js`、Mod）：
+  - Claude Code 不登记只给应用用的工具，所以用户打不开插件的 MCP 应用；Mod 面板只能画 Claude 自带的元素，也放不进网页。于是由引擎在 `/__cam/panel?session=<id>` 提供 `panel.html`，前面加一段 `panel-web.js` 代替 MCP 应用的宿主：把面板的工具调用转成引擎的本机接口 `/__cam/claude/panel`、`select`、`image`。
+  - 页面和接口只接受用本机名字（`localhost`、`127.0.0.1`、`[::1]`）访问、不带其他网站 Origin 的请求；接口还要带 `x-cam-panel` 请求头；页面带严格的 CSP。
+  - `/cam` 用桌面版给每个 Code 会话的浏览器工具（`Claude_Browser` 的 `preview_start`），在自带的浏览器里打开页面。这个工具不是公开给插件的接口，调用失败或者没有时，Mod 弹出小面板给链接。Mod 面板里的链接，点开会交给系统浏览器。
+  - 小面板上的图片数，在打开时、每轮结束后，以及 `/clear`、`/resume` 之后重新读取。
+  - 页面语言跟着引擎（`CAM_LANG` 或系统语言），不看浏览器。
+- **取图工具**：插件服务以 `CAM_HOST=claude` 运行，只给模型 `cam_view_image`。Mod 把调用它的会话 id 补进参数（插件服务可能比 `/clear`、`/resume` 活得久），并在 `classic.PreToolUse` 里放行这一个工具：先让下面的钩子和设置判断，它们拒绝或要求询问时照旧。
+- **数据目录**：Claude 会话的勾选在 `claude/selection/`，请求统计在 `claude/requests/`，和 Codex 的分开。
+- **安装**：
+  - 仓库根目录同时是 Claude 插件市场（`.claude-plugin/marketplace.json` 指向仓库根目录），清单是 `.claude-plugin/plugin.json`：同一个 MCP 服务（`plugin/scripts/launch`，`CAM_HOST=claude`），另加 Mod（`hooks/hooks.json`）。
+  - 用户运行 `claude plugin marketplace add chipfighter/codex-attachment-manager` 和 `claude plugin install codex-attachment-manager@codex-attachment-manager`。装好的插件按版本缓存，代码改了要升版本才会重新安装。
+  - Claude 桌面不带 Node。没装 Codex 时，启动脚本用 PATH 上 24 以上的 `node`，找不到就提示安装 Node 24。
+- **测试**：单元测试同第 10 节（`claude-*.test.ts`）。Mod 的界面和钩子用 Claude Code 自带的测试工具（`claude plugin test`）测。模型测试用真实的 Claude 桌面订阅会话，按 v0.4/plan.md 的约定用 Haiku 5.5，中英文都测。
+- **依赖的 Claude 行为**（都不是公开接口，Claude 更新后要重新验证）：
+  - 会话记录的格式：`parentUuid`、`turnPosition`、压缩分界、并行工具结果的挂法；请求头 `x-claude-code-session-id`。
+  - 桌面版启动会话的方式：启动时传入 `ANTHROPIC_BASE_URL`；新会话要到第一条输入才启动进程，所以 `/cam` 在那之前不在输入框的命令列表里。
+  - `Claude_Browser` 浏览器工具；Mod 面板里的链接交给系统浏览器；桌面版在会话里发的附带请求。
+  - 思考记录的前缀校验：替换历史里的一张图，之后的思考块就对不上了；2026-08-31 以后注册的账号直接拒绝。
