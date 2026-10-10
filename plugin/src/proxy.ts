@@ -17,12 +17,13 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
+import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { claudeHome, loadClaudeIndex, type ClaudeIndex } from "./claude-index.ts";
 import { findRequestImages, rewriteMessages, type RequestImage } from "./claude-rewrite.ts";
@@ -41,6 +42,7 @@ import { effectiveSelection, readSelection, selectionDir } from "./selection.ts"
 import { loadThreadIndex, pixelHashOf, pixelHashOfData, setPixelCache, type ThreadIndex } from "./thread-index.ts";
 
 type Json = Record<string, any>;
+const here = dirname(fileURLToPath(import.meta.url));
 const UPSTREAM_HOST = "chatgpt.com";
 // v0.4: Claude Code's API host.
 export const CLAUDE_HOST = "api.anthropic.com";
@@ -359,14 +361,33 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
   return { body, report: { ...summary, decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
 }
 
-// v0.4: the Claude plugin's panel reads and changes a session's images here (hooks/register.js). The Codex panel goes
-// through the plugin's MCP server; a Claude mod can reach that server only through Claude Code's tool permissions (a
-// prompt for every call, and none at all for app-only tools), so it asks the engine, the one local HTTP service.
-// Loopback only, like everything the engine serves. A page in a browser cannot use it: it would send an Origin header,
-// and our own header makes its request one the browser asks about first, which the engine never answers.
+// v0.4: a Claude Code session's panel reads and changes its images here: the panel page the engine serves
+// (/__cam/panel, panel.html with panel-web.js) and the Claude plugin's mod. The Codex panel goes through the plugin's
+// MCP server; under Claude Code that is not open to a panel (a mod reaches it only through Claude Code's tool
+// permissions, a prompt for every call, and Claude Code registers no app-only tool), so the engine, the one local HTTP
+// service, serves the panel. Loopback only, like everything the engine serves; only a request naming the engine by a
+// loopback name (no other site rebinding its name to 127.0.0.1), carrying our header, and coming from no other site's
+// page (a browser's Origin, when sent, is the engine's own).
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
+export function ownRequest(headers: IncomingHttpHeaders): boolean {
+  const host = String(headers.host ?? "");
+  if (!LOOPBACK_HOST.test(host)) return false;
+  return headers.origin === undefined || headers.origin === `http://${host}`;
+}
+
+// The panel page for a Claude Code session: the same panel.html as in Codex, with panel-web.js before its own script.
+export function claudePanelPage(dir = here): string {
+  const page = readFileSync(join(dir, "panel.html"), "utf8");
+  const bridge = readFileSync(join(dir, "panel-web.js"), "utf8");
+  const at = page.indexOf("<script>");
+  if (at < 0) throw new Error("panel.html has no script");
+  return `${page.slice(0, at)}<script>\n${bridge}\n</script>\n${page.slice(at)}`;
+}
+export const PANEL_PAGE_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 export function claudePanelApi(method: string, url: string, headers: IncomingHttpHeaders, body: string | null, options: ClaudePanelOptions = {}): { status: number; body: Json } {
-  if (headers.origin !== undefined || headers["x-cam-panel"] !== "1") return { status: 403, body: { error: "forbidden" } };
+  if (!ownRequest(headers) || headers["x-cam-panel"] !== "1") return { status: 403, body: { error: "forbidden" } };
   const parsed = new URL(url, "http://localhost");
   const session = parsed.searchParams.get("session") ?? "";
   if (!SESSION_ID.test(session)) return { status: 400, body: { error: "no session" } };
@@ -498,7 +519,21 @@ async function main(): Promise<void> {
       retire(String(req.headers["x-cam-build"] ?? ""));
       return;
     }
-    // v0.4: the Claude plugin's panel (claudePanelApi).
+    // v0.4: a Claude Code session's panel: the page (panel.html as in Codex, with panel-web.js), and its API.
+    if (req.method === "GET" && (req.url ?? "").split("?")[0] === "/__cam/panel") {
+      if (!ownRequest(req.headers)) { res.writeHead(403, { "content-type": "text/plain" }); res.end("forbidden"); return; }
+      let page: string;
+      try {
+        page = claudePanelPage();
+      } catch (error) {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end(String(error));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": PANEL_PAGE_CSP, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" });
+      res.end(page);
+      return;
+    }
     if ((req.url ?? "").startsWith("/__cam/claude/")) {
       const chunks: Buffer[] = [];
       let size = 0;

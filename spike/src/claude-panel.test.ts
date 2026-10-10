@@ -11,12 +11,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { claudeSelectionDirOf } from "../../plugin/src/paths.ts";
 import { callClaudeTool, claudeToolsFor } from "../../plugin/src/plugin-server.ts";
-import { claudePanelApi } from "../../plugin/src/proxy.ts";
+import { claudePanelApi, claudePanelPage, ownRequest } from "../../plugin/src/proxy.ts";
 import { pngC, usualSession } from "./claude-fixtures.ts";
 
 process.env.CAM_LANG = "zh";
 const session = "11111111-2222-4333-8444-555555555555";
-const panelHeaders = { "x-cam-panel": "1" };
+const panelHeaders = { "x-cam-panel": "1", host: "127.0.0.1:17891" };
 
 function setup() {
   const home = mkdtempSync(join(tmpdir(), "cam-claude-home-"));
@@ -84,4 +84,22 @@ test("cam_view_image works only with automatic selection on, and returns the ori
   assert.match(on.content[2].text, /没有 IMG-099/);
   // Without a session in the call, the one Claude Code started the service for.
   assert.equal(callClaudeTool("cam_view_image", { ids: ["IMG-003"] }, options, { CLAUDE_CODE_SESSION_ID: session }).isError, false);
+});
+
+test("the panel page and API answer only requests naming the engine by a loopback name, from no other site", () => {
+  assert.equal(ownRequest({ host: "localhost:17891" }), true, "the mod: no Origin");
+  assert.equal(ownRequest({ host: "localhost:17891", origin: "http://localhost:17891" }), true, "the page itself");
+  assert.equal(ownRequest({ host: "[::1]:17891", origin: "http://[::1]:17891" }), true);
+  assert.equal(ownRequest({ host: "localhost:17891", origin: "https://example.com" }), false, "another site");
+  assert.equal(ownRequest({ host: "evil.example:17891", origin: "http://evil.example:17891" }), false, "a name rebound to 127.0.0.1");
+  assert.equal(ownRequest({}), false);
+  const { options } = setup();
+  assert.equal(claudePanelApi("GET", `/__cam/claude/panel?session=${session}`, { "x-cam-panel": "1", host: "localhost:17891", origin: "http://localhost:17891" }, "", options).status, 200);
+});
+
+test("the panel page is the Codex panel.html with the engine bridge before its own script", () => {
+  const page = claudePanelPage();
+  const bridge = page.indexOf("window.camHost = {");
+  const own = page.indexOf("const post = (message) => (window.camHost");
+  assert.ok(bridge > 0 && own > bridge);
 });

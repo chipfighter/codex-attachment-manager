@@ -543,7 +543,9 @@
   // ---- MCP Apps bridge (JSON-RPC over postMessage with Codex) ----
   let nextId = 1;
   const waiting = new Map();
-  const post = (message) => window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  // v0.4: the same page also runs on its own for a Claude Code session (served by the engine), where panel-web.js stands
+  // in for the host as window.camHost.
+  const post = (message) => (window.camHost ? window.camHost.post({ jsonrpc: "2.0", ...message }) : window.parent.postMessage({ jsonrpc: "2.0", ...message }, "*"));
   function request(method, params, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const id = nextId++;
