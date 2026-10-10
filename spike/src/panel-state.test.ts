@@ -117,6 +117,17 @@ test("the panel is told when the engine could not rewrite, or a WebSocket turn k
   assert.equal(sendInfo({ latest: http, lastHttp: http }).baseline, null, "a request without image sizes is no baseline");
 });
 
+test("v0.4: the panel is told when the engine left out thinking that no longer fits, or had to send the original", () => {
+  const sent = { at: "t4", transport: "http", decodedBytes: 900, rewrite: { replaced: [{ id: "IMG-001" }], thinking: { kept: 1, left: 2 }, decodedAfter: 700 } };
+  assert.deepEqual(sendInfo({ latest: sent, lastHttp: sent }).notice, { kind: "thinking", at: "t4", count: 2 });
+  assert.deepEqual(sendInfo({ latest: sent, lastHttp: sent }).last, { at: "t4", bytesBefore: 900, bytesAfter: 700, replaced: 1, skipped: false });
+  // All of it fitted: nothing to tell.
+  const fitted = { ...sent, rewrite: { ...sent.rewrite, thinking: { kept: 3, left: 0 } } };
+  assert.equal(sendInfo({ latest: fitted, lastHttp: fitted }).notice, null);
+  const original = { ...sent, rewrite: { replaced: [{ id: "IMG-001" }], fallback: "thinking-signature" } };
+  assert.deepEqual(sendInfo({ latest: original, lastHttp: original }).notice, { kind: "fallback", at: "t4" });
+});
+
 test("check and uncheck are kept per thread and validated", () => {
   const options = sampleSessions();
   let state = applySelection(THREAD, { uncheck: ["IMG-001", "IMG-003"] }, options);
