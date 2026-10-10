@@ -1,7 +1,7 @@
 #!/bin/sh
 # Purpose: v0.1-5 - remove the Codex attachment manager on macOS or Linux in one line; also the way back when Codex
 # cannot connect because the plugin was removed without turning it off in the panel first:
-#   curl -fsSL https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/uninstall.sh | sh
+#   curl -fsSL https://github.com/chipfighter/context-attachment-manager/releases/latest/download/uninstall.sh | sh
 # Takes out only the marked blocks this tool wrote to config.toml and .env (config.toml is backed up first), then removes
 # the plugin and its marketplace with Codex's own command line. Needs neither Node nor any of the plugin's files.
 # Input: CODEX_HOME, CAM_DATA_DIR, XDG_DATA_HOME, CODEX_CLI_PATH. Output: config.toml, .env, Codex's plugin cache.

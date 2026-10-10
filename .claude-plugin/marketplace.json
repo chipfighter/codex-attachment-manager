@@ -3,7 +3,7 @@
   "owner": {
     "name": "chipfighter"
   },
-  "description": "Codex Attachment Manager for Claude Code: choose which past images go to the model with your next message.",
+  "description": "Context Attachment Manager for Claude Code: choose which past images go to the model with your next message.",
   "plugins": [
     {
       "name": "codex-attachment-manager",

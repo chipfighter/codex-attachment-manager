@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Codex Attachment Manager（上下文素材管理器）：让用户逐轮决定，Codex 任务里的哪些图片和文件进入下一轮请求。
+Context Attachment Manager（上下文素材管理器，2026-10-11 前叫 Codex Attachment Manager）：让用户逐轮决定，Codex 任务和 Claude Code 会话里的哪些图片和文件进入下一轮请求。
 
 ## 从哪里读起
 

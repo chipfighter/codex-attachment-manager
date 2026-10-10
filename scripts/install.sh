@@ -1,13 +1,13 @@
 #!/bin/sh
 # Purpose: v0.1-5 - install the Codex attachment manager on macOS or Linux in one line, without opening GitHub:
-#   curl -fsSL https://github.com/chipfighter/codex-attachment-manager/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/chipfighter/context-attachment-manager/releases/latest/download/install.sh | sh
 # Codex's own command line adds this repository as a plugin marketplace and installs the plugin; the installed plugin
 # then points Codex at its local engine (cam setup) and starts it. Running it again upgrades. Restart Codex afterwards.
 # Input: CAM_REF (a tag or branch; a release sets its own tag), CAM_SOURCE (a local checkout, for tests),
 # CODEX_CLI_PATH, CODEX_HOME. Output: Codex's plugin cache, config.toml (backed up first) and, when needed, .env.
 set -eu
 
-repo=chipfighter/codex-attachment-manager
+repo=chipfighter/context-attachment-manager
 name=codex-attachment-manager
 plugin="$name@$name"
 
