@@ -6,9 +6,11 @@
 //    when the process ends. It leaves a session alone that already uses another endpoint or a third-party provider.
 //    The subscription login is untouched: the engine forwards the same headers to api.anthropic.com.
 // 2. The way to the panel. The panel is the Codex panel itself (plugin/src/panel.html), served by the engine as a page
-//    for this session (proxy.ts, /__cam/panel) and opened in a browser: a mod draws only its own simple elements (no
-//    web page), and Claude Code opens no MCP app for the user. /cam opens a small pane with where this session's
-//    requests go, the session's images in short, a link to the panel and a button that copies it.
+//    for this session (proxy.ts, /__cam/panel): a mod draws only its own simple elements (no web page), and Claude
+//    Code opens no MCP app for the user. /cam opens the page in Claude Desktop's own browser, beside the conversation
+//    (user 2026-10-10). A small pane comes up only when there is something to say: the page could not open there (the
+//    terminal, VS Code, a failure), with a link to it and a button that copies it; or checks have no effect for this
+//    session (its requests do not go through the engine).
 // Also: the model's cam_view_image call gets this session's id (the service may outlive a /clear or /resume).
 // Input: mod events. Output: env changes for this process, a pane, requests to the engine on 127.0.0.1.
 
@@ -22,7 +24,8 @@ const WORDS = {
   zh: {
     title: '上下文素材',
     open: '打开素材面板', copy: '复制链接', copied: '已复制链接',
-    hint: '面板是本机引擎提供的网页，和 Codex 里的面板相同：勾选、预览、筛选、自动选图都在那里。点上面的链接打开；没有打开时，复制链接粘贴到浏览器（Claude 桌面自带的浏览器面板也可以）。',
+    opened: '面板已在 Claude 自带的浏览器里打开。',
+    hint: '面板是本机引擎提供的网页，和 Codex 里的面板相同：勾选、预览、筛选、自动选图都在那里。点上面的链接在浏览器里打开，或复制链接粘贴到浏览器。',
     summary: (images, off) => `本会话 ${images} 张图片${off ? `，${off} 张不发送` : ''}`,
     routing: {
       on: (port) => `本会话的请求经过本机引擎（端口 ${port}）`,
@@ -37,7 +40,8 @@ const WORDS = {
   en: {
     title: 'Context Assets',
     open: 'Open the assets panel', copy: 'Copy link', copied: 'Link copied',
-    hint: 'The panel is a page the local engine serves, the same as in Codex: checks, previews, filters and automatic selection are there. Open it with the link above; if nothing opens, copy the link into a browser (Claude Desktop\'s own browser pane works too).',
+    opened: 'The panel is open in Claude\'s own browser.',
+    hint: 'The panel is a page the local engine serves, the same as in Codex: checks, previews, filters and automatic selection are there. Open it in a browser with the link above, or copy the link into one.',
     summary: (images, off) => `${images} images in this session${off ? `, ${off} not sent` : ''}`,
     routing: {
       on: (port) => `This session's requests go through the local engine (port ${port})`,
@@ -51,9 +55,11 @@ const WORDS = {
   },
 }
 
-// What the pane shows, kept between redraws: the routing state, and the engine's short answer about the session (read
-// when the pane opens, then again after each turn and each /clear or /resume once it has been opened).
+// What the pane shows, kept between redraws: the routing state, whether /cam opened the page in Claude's browser, and
+// the engine's short answer about the session (read when the pane opens, then again after each turn and each /clear or
+// /resume once it has been opened).
 let routingState = null
+let inBrowser = false
 let overview = null
 let paneOpened = false
 let copied = false
@@ -140,9 +146,28 @@ async function restoreRouting($) {
   await $.state.set(ROUTING, routingState)
 }
 
-// ---- The pane ----
+// ---- The panel page and the pane ----
 
 const panelUrl = (sessionId) => `http://localhost:${ENGINE_PORT}/__cam/panel?session=${encodeURIComponent(sessionId)}`
+
+// Claude Desktop's browser tools: the Claude_Browser server it gives each Code session, the one the model opens pages
+// with. They are the desktop's, not a plugin interface: where they are missing or fail, the pane offers the link.
+async function openInBrowser($, url) {
+  try {
+    const result = await $.mcp.call('Claude_Browser', 'preview_start', { url })
+    return result?.isError !== true
+  } catch {
+    return false
+  }
+}
+
+// /cam.
+async function openPanel($) {
+  routingState = (await readRouting($)) ?? routingState
+  inBrowser = await openInBrowser($, panelUrl(await $.session.id()))
+  if (!inBrowser || !routingState?.active) await openPane($)
+  else await $.ui.invalidate('ui.render')
+}
 
 async function loadOverview($) {
   try {
@@ -180,6 +205,7 @@ async function drawPane($, e) {
       Text({ bold: true, children: [w.title] }),
       Text(routing?.active ? { dimColor: true, children: [status] } : { color: 'yellow', children: [status] }),
       ...(overview ? [Text({ children: [w.summary(overview.images, overview.off)] })] : []),
+      ...(inBrowser ? [Text({ children: [w.opened] })] : []),
       Box({
         flexDirection: 'row', columnGap: 2,
         children: [
@@ -227,7 +253,7 @@ export function register(on) {
   })
 
   on('command.run', { command: 'cam' }, async ($) => {
-    await openPane($)
+    await openPanel($)
     return {}
   })
 
