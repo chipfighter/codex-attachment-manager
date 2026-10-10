@@ -11,7 +11,9 @@
 //    (user 2026-10-10). A small pane comes up only when there is something to say: the page could not open there (the
 //    terminal, VS Code, a failure), with a link to it and a button that copies it; or checks have no effect for this
 //    session (its requests do not go through the engine).
-// Also: the model's cam_view_image call gets this session's id (the service may outlive a /clear or /resume).
+// Also: the model's cam_view_image call gets this session's id (the service may outlive a /clear or /resume), and needs
+// no permission prompt: it is the plugin's own read-only tool, approved as in Codex (default_tools_approval_mode
+// "approve" there; user 2026-10-10 here). A deny or ask from the user's own hooks or settings still stands.
 // Input: mod events. Output: env changes for this process, a pane, requests to the engine on 127.0.0.1.
 
 const PLUGIN = 'codex-attachment-manager'
@@ -19,6 +21,8 @@ const PLUGIN = 'codex-attachment-manager'
 const ENGINE_PORT = 17891
 const PANE = 'cam'
 const ROUTING = { plugin: 'codex-attachment-manager', key: 'routing' }
+// The model's image fetch, as Claude Code names the tool of this plugin's MCP server (.claude-plugin/plugin.json).
+const FETCH_TOOL = 'mcp__plugin_codex-attachment-manager_codex_attachment_manager__cam_view_image'
 
 const WORDS = {
   zh: {
@@ -262,6 +266,12 @@ export function register(on) {
   on('tool.call', async ($, e, next) => {
     if (typeof e.tool === 'string' && e.tool.endsWith('__cam_view_image')) return next({ ...e, sessionId: await $.session.id() })
     return next(e)
+  }).catch(($, e, next) => (next.called ? undefined : next(e)))
+
+  on('classic.PreToolUse', { tool: FETCH_TOOL }, async ($, e, next) => {
+    const result = await next(e)
+    if (result?.deny !== undefined || result?.ask !== undefined) return result
+    return { ...result, allow: true }
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
