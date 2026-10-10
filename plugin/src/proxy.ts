@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import { claudeHome, loadClaudeIndex, type ClaudeIndex } from "./claude-index.ts";
 import { findRequestImages, rewriteMessages, type RequestImage } from "./claude-rewrite.ts";
-import { chainOf, fitThinking, readThinkingRecord, rememberSent, writeThinkingRecord, type ThinkingRecord } from "./claude-thinking.ts";
+import { chainOf, fitThinking, readThinkingRecord, recordSent, writeThinkingRecord, type ThinkingRecord } from "./claude-thinking.ts";
 import { codexHome } from "./codexconfig.ts";
 import { buildOf, DEFAULT_PORT, ENGINE_SERVICE, engineHealth, versionOf, watchForCodex } from "./engine.ts";
 import { findImages, type ImageRef } from "./images.ts";
@@ -323,11 +323,13 @@ export function thinkingRejected(status: number, body: string): boolean {
   return status === 400 && /thinking/i.test(body) && /signature|bound to a different conversation|prefix/i.test(body);
 }
 
-// v0.4: what to send for a Claude Code request, in order: the rewrite; if Anthropic refuses the thinking after the
-// changed history (thinkingRejected), the rewrite without the thinking that no longer fits (claude-thinking.ts); then
-// the original. Once a session's account refused such thinking (thinking.strict), the rewrite goes without it from the
-// start. history/sent: the chains to remember once an attempt goes through.
-export type ClaudeAttempt = { body: Buffer; report: Json; history: string | null; sent: string | null };
+// v0.4: what to send for a Claude Code request, each next one when Anthropic refuses the thinking after the changed
+// history (thinkingRejected): the rewrite with all its thinking (an account that lets it through); the rewrite without
+// the thinking that no longer fits (claude-thinking.ts), first once the account is known to refuse it; the rewrite
+// without any thinking, always accepted; the original as Claude Code built it. history/sent: the chains to remember
+// once the attempt goes through (null: not the session's conversation); made: the histories its thinking was made
+// after; sure: the record says all its thinking fits, so a refusal means the record misses what went out.
+export type ClaudeAttempt = { body: Buffer; report: Json; history: string | null; sent: string | null; made: string[]; sure: boolean };
 
 // v0.4: the same rules as rewriteBody, for a Claude Code request (Anthropic Messages, claude-rewrite.ts). The current
 // turn is the transcript's latest prompt: Claude Code writes it before it sends the request.
@@ -365,10 +367,14 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
     ...(report.copies.length ? { copies: report.copies } : {}),
   };
   const changed = report.replaced.length > 0 || report.copies.length > 0;
+  // Once the engine has sent the session a changed history, thinking made after it may be in every later request, even
+  // with nothing left out now (an image checked again).
+  if (!changed && !thinking?.edited) return { body: original, report: summary, attempts: [] };
   const rewritten = changed ? messages : json.messages;
-  // Thinking made after an earlier edit may not fit even when nothing is left out now (an image checked again).
-  const fit = thinking ? fitThinking(json.messages, rewritten, thinking.sent) : null;
-  if (!changed && !(thinking?.strict && fit?.left)) return { body: original, report: summary, attempts: [] };
+  const fit = thinking ? fitThinking(json.messages, rewritten, thinking) : null;
+  // Side requests (no tools: the desktop's status summary, auto mode's check) are not the conversation.
+  const conversation = Array.isArray(json.tools) && json.tools.length > 0;
+  const history = fit && conversation ? fit.history : null;
   const experiment = env.CAM_EXPERIMENT_BLOCK_BINDING?.trim();
   const encode = (list: Json[], extra: Json) => {
     const out: Json = { ...json, messages: list };
@@ -379,14 +385,19 @@ export function rewriteClaudeBody(original: Buffer, encoding: string | undefined
     return { body, report: { ...summary, ...extra, ...(asked ? { experiment: { blockBinding: experiment, beta: "thinking-binding-controls-2026-08-01" } } : {}), decodedBefore: decoded.length, decodedAfter: next.length, encodedBefore: original.length, encodedAfter: body.length } };
   };
   const attempts: ClaudeAttempt[] = [];
-  const add = (list: Json[], extra: Json, history: string | null, sent: string | null) => attempts.push({ ...encode(list, extra), history, sent });
-  if (changed && !thinking?.strict) add(rewritten, {}, fit?.history ?? null, fit ? chainOf(rewritten) : null);
-  if (changed && fit && (thinking?.strict || fit.left)) add(fit.messages, { thinking: { kept: fit.kept, left: fit.left }, ...(thinking?.strict ? {} : { retry: "thinking-signature" }) }, fit.history, fit.sent);
-  // Then the original as Claude Code built it, without the thinking made while the engine had changed the history
-  // before it: on an account that checks thinking, that no longer fits the original either.
-  const back = !thinking ? null : changed ? fitThinking(json.messages, json.messages, thinking.sent) : fit;
-  if (back?.left) add(back.messages, { thinking: { kept: back.kept, left: back.left }, ...(changed ? { fallback: "thinking-signature" } : {}) }, back.history, back.sent);
-  attempts.push({ body: original, report: { ...summary, fallback: "thinking-signature" }, history: back?.history ?? null, sent: back?.history ?? null });
+  const made = fit?.made ?? [];
+  const add = (list: Json[], extra: Json, sent: string, sure: boolean) => attempts.push({ ...encode(list, extra), history, sent: history ? sent : null, made, sure });
+  const asBuilt = (extra: Json, sure: boolean) => attempts.push({ body: original, report: { ...summary, ...extra }, history, sent: history, made, sure });
+  if (!thinking?.strict) {
+    if (changed) add(rewritten, {}, chainOf(rewritten), fit?.left === 0);
+    else asBuilt({}, fit!.left === 0);
+  }
+  if (fit && (thinking!.strict || fit.left)) add(fit.messages, { thinking: { kept: fit.kept, left: fit.left }, ...(thinking!.strict ? {} : { retry: "thinking-signature" }) }, fit.sent, true);
+  if (fit?.kept) {
+    const bare = fitThinking(json.messages, rewritten, thinking!, false);
+    add(bare.messages, { thinking: { kept: 0, left: bare.left }, retry: "thinking-signature" }, bare.sent, false);
+  }
+  if (changed || thinking?.strict) asBuilt(changed ? { fallback: "thinking-signature" } : {}, false);
   return { body: attempts[0].body, report: attempts[0].report, attempts };
 }
 
@@ -598,10 +609,10 @@ async function main(): Promise<void> {
     // Codex thread's once something is unchecked there.
     const claude = upstream === CLAUDE_HOST ? claudeIdentity(req.headers) : null;
     const claudeSession = claude?.sessionId && !claude.agentId && req.method === "POST" && path === "/v1/messages" ? claude.sessionId : null;
-    // Once the session's account refused thinking after a changed history, every request of it is looked at, even with
-    // nothing left out now: thinking made after an edited history no longer fits the history as it was.
+    // Once the engine has sent the session a changed history, every request of it is looked at, even with nothing left
+    // out now: thinking made after a changed history no longer fits the history as it was.
     const thinking = claudeSession ? thinkingOf(claudeSession) : null;
-    const claudeRewrite = claudeNeedsRewrite(claudeSession) || !!(thinking?.strict && thinking.sent.size);
+    const claudeRewrite = claudeNeedsRewrite(claudeSession) || !!thinking?.edited;
     const claudeFields = claude ? { claudeSessionId: claude.sessionId, claudeAgentId: claude.agentId } : {};
     const chunks: Buffer[] = [];
     let requestBytes = 0;
@@ -644,7 +655,7 @@ async function main(): Promise<void> {
     // What to send, in order: body null streams the request through unchanged. v0.4: Anthropic refusing an attempt's
     // thinking after the changed history (thinkingRejected) moves on to the next one (see ClaudeAttempt), the last being
     // the original as Claude Code built it; the statistics say which went out (the panel shows a fallback).
-    type Attempt = { body: Buffer | null; report: Json | null; edited: boolean; history?: string | null; sent?: string | null };
+    type Attempt = { body: Buffer | null; report: Json | null; edited: boolean } & Partial<Pick<ClaudeAttempt, "history" | "sent" | "made" | "sure">>;
     const send = (attempts: Attempt[], at = 0): void => { connectUpstream(viaOf(upstream), upstream).then((socket) => {
       const attempt = attempts[at];
       const outgoing = forwardHeaders(req.headers, upstream);
@@ -668,9 +679,12 @@ async function main(): Promise<void> {
             if (thinkingRejected(status, text)) {
               extra = { ...extra, rejected: [...(extra.rejected ?? []), status] };
               if (dumpDir) { try { writeFileSync(dumpName(`.rejected-${at}.json`), text); } catch { /* experiments only */ } }
-              // The account checks thinking: from now on the session's rewrites leave out what no longer fits.
-              if (thinking && claudeSession && attempt.history && !thinking.strict) {
+              // The account checks thinking: from now on the session's rewrites leave out what no longer fits. Refused
+              // although the record said it all fits, the record misses what went out (a lost file, old entries): only
+              // what goes out from now on counts.
+              if (thinking && claudeSession && attempt.history) {
                 thinking.strict = true;
+                if (attempt.sure) thinking.sent.clear();
                 try { writeThinkingRecord(claudeSession, thinking); } catch { /* kept in memory */ }
               }
               socket.destroy();
@@ -685,8 +699,7 @@ async function main(): Promise<void> {
           return;
         }
         // The thinking the model makes now comes after what this attempt sent.
-        if (status >= 200 && status < 300 && thinking && claudeSession && attempt.history && attempt.sent) {
-          rememberSent(thinking, attempt.history, attempt.sent);
+        if (status >= 200 && status < 300 && thinking && claudeSession && attempt.history && attempt.sent && recordSent(thinking, attempt.history, attempt.sent, attempt.made ?? [])) {
           try { writeThinkingRecord(claudeSession, thinking); } catch { /* kept in memory */ }
         }
         res.writeHead(status, headers);

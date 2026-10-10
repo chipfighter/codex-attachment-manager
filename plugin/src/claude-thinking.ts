@@ -2,11 +2,12 @@
 // Anthropic binds each thinking block to everything before it in the conversation (Fable 5.1, Opus 5.5, Sonnet 5.5,
 // Haiku 5.5); accounts created from 2026-08-31 refuse a request whose thinking no longer matches, older ones let it
 // through (docs/v0.4/plan.md §2). Thinking may be left out, as long as each block kept comes after exactly what it was
-// made after. So the engine remembers, per session, what it sent for each history it saw (as hash chains), and keeps a
-// thinking block only when what comes before it now is what was sent when the block was made.
+// made after. So once the engine has sent a session a changed history, it remembers what it sent for each history (as
+// hash chains), and keeps a thinking block only when what comes before it now is what was sent when it was made. A
+// block made after a history it has no entry for is left out: the record may be incomplete (a lost file, old entries).
 // Input: a request's messages as Claude Code built them and as the engine will send them; the session's record.
-// Output: the messages without the thinking that no longer fits, counts, and the chains to remember;
-// <data dir>/claude/thinking/<session>.json (whether the account refuses such thinking, and hashes; never content).
+// Output: the messages without the thinking that no longer fits, counts, the chains to remember;
+// <data dir>/claude/thinking/<session>.json (flags and hashes; never content).
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -16,7 +17,7 @@ import { claudeThinkingDirOf } from "./paths.ts";
 type Json = Record<string, any>;
 const THINKING = new Set(["thinking", "redacted_thinking"]);
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-// Hashes of the latest histories only: a block is made after the history of the request just before it.
+// The latest histories only: older thinking without an entry is left out.
 const KEEP = 2000;
 
 // What Anthropic compares: values, not JSON formatting or key order; content given as a string is the text block it
@@ -40,56 +41,86 @@ export const chainOf = (messages: Json[]): string => messages.reduce((chain: str
 const thinkingIn = (message: Json): number =>
   message?.role === "assistant" && Array.isArray(message.content) ? message.content.filter((block: Json) => THINKING.has(block?.type)).length : 0;
 
-export type ThinkingFit = { messages: Json[]; kept: number; left: number; history: string; sent: string };
+// edited: the engine has sent this session a changed history; until then every history went out as Claude Code built
+// it. strict: Anthropic refused this session's thinking after a changed history (the account checks it).
+export type ThinkingRecord = { edited: boolean; strict: boolean; sent: Map<string, string> };
+export const newThinkingRecord = (): ThinkingRecord => ({ edited: false, strict: false, sent: new Map() });
 
-// sent: for each history the engine changed, the chain of what it sent instead. A history it never changed went out as
-// it was. The rewrite never adds, drops or edits an assistant message, so the n-th one of each list is the same.
-export function fitThinking(original: Json[], outgoing: Json[], sent: ReadonlyMap<string, string>): ThinkingFit {
+// made: the histories the request's thinking was made after.
+export type ThinkingFit = { messages: Json[]; kept: number; left: number; history: string; sent: string; made: string[] };
+
+// The rewrite never adds, drops or edits an assistant message, so the n-th one of each list is the same. keep false
+// leaves out all thinking, which Anthropic always accepts. An assistant message left empty goes too: Anthropic takes no
+// empty message, and joins the user messages around it.
+export function fitThinking(original: Json[], outgoing: Json[], record: ThinkingRecord, keep = true): ThinkingFit {
   const madeAfter: string[] = [];
   let history = "";
   for (const message of original) {
     if (message?.role === "assistant") madeAfter.push(history);
     history = link(history, message);
   }
+  const sentAfter = (made: string) => (record.sent.has(made) ? record.sent.get(made) : record.edited ? null : made);
   let chain = "";
   let assistant = 0;
   let kept = 0;
   let left = 0;
-  const messages = outgoing.map((message) => {
-    let next = message;
+  const made: string[] = [];
+  const messages: Json[] = [];
+  for (const message of outgoing) {
+    let next: Json | null = message;
     if (message?.role === "assistant") {
-      const made = madeAfter[assistant++];
+      const after = madeAfter[assistant++];
       const count = thinkingIn(message);
-      if (count) {
+      if (count && after !== undefined) made.push(after);
+      if (count && keep && after !== undefined && sentAfter(after) === chain) kept += count;
+      else if (count) {
+        left += count;
         const rest = message.content.filter((block: Json) => !THINKING.has(block?.type));
-        // A message of thinking alone stays: Anthropic takes no empty message (the request may then be refused).
-        if (made === undefined || (sent.get(made) ?? made) === chain || !rest.length) kept += count;
-        else {
-          left += count;
-          next = { ...message, content: rest };
-        }
+        next = rest.length ? { ...message, content: rest } : null;
       }
     }
+    if (!next) continue;
     chain = link(chain, next);
-    return next;
-  });
-  return { messages, kept, left, history, sent: chain };
+    messages.push(next);
+  }
+  return { messages, kept, left, history, sent: chain, made };
 }
 
-// strict: Anthropic refused this session's thinking after an edited history once (the account checks it).
-export type ThinkingRecord = { strict: boolean; sent: Map<string, string> };
+// What went out for a history (latest last).
+export function rememberSent(record: ThinkingRecord, history: string, sent: string): void {
+  record.sent.delete(history);
+  record.sent.set(history, sent);
+  for (const key of record.sent.keys()) {
+    if (record.sent.size <= KEEP) break;
+    record.sent.delete(key);
+  }
+}
+
+// After a request went through: what it sent for its history. The first changed history the engine sends a session
+// starts the record, with the histories its thinking so far was made after (they went out as they were). Returns
+// whether the record changed.
+export function recordSent(record: ThinkingRecord, history: string, sent: string, made: string[]): boolean {
+  if (!record.edited && sent === history) return false;
+  if (!record.edited) {
+    record.edited = true;
+    for (const before of made) rememberSent(record, before, before);
+  }
+  rememberSent(record, history, sent);
+  return true;
+}
 
 export function readThinkingRecord(sessionId: string, dir = claudeThinkingDirOf()): ThinkingRecord {
-  const empty: ThinkingRecord = { strict: false, sent: new Map() };
-  if (!SESSION_ID.test(sessionId)) return empty;
+  if (!SESSION_ID.test(sessionId)) return newThinkingRecord();
   const file = join(dir, `${sessionId}.json`);
-  if (!existsSync(file)) return empty;
+  if (!existsSync(file)) return newThinkingRecord();
   try {
     const json = JSON.parse(readFileSync(file, "utf8"));
     const pairs = Array.isArray(json.sent) ? json.sent.filter((pair: unknown) => Array.isArray(pair) && pair.length === 2 && pair.every((hash) => typeof hash === "string")) : [];
-    return { strict: json.strict === true, sent: new Map(pairs) };
+    // A record is written once the engine has sent a changed history.
+    return { edited: json.edited !== false, strict: json.strict === true, sent: new Map(pairs) };
   } catch {
-    return empty;
+    // Unreadable: what went out is unknown, so the thinking made so far is left out.
+    return { edited: true, strict: false, sent: new Map() };
   }
 }
 
@@ -97,16 +128,6 @@ export function writeThinkingRecord(sessionId: string, record: ThinkingRecord, d
   if (!SESSION_ID.test(sessionId)) return;
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${sessionId}.json`);
-  writeFileSync(`${file}.tmp`, JSON.stringify({ strict: record.strict, sent: [...record.sent] }));
+  writeFileSync(`${file}.tmp`, JSON.stringify({ edited: record.edited, strict: record.strict, sent: [...record.sent] }));
   renameSync(`${file}.tmp`, file);
-}
-
-// What went out for a history: a changed one is remembered (latest last), one sent as it was needs no entry.
-export function rememberSent(record: ThinkingRecord, history: string, sent: string): void {
-  record.sent.delete(history);
-  if (sent !== history) record.sent.set(history, sent);
-  for (const key of record.sent.keys()) {
-    if (record.sent.size <= KEEP) break;
-    record.sent.delete(key);
-  }
 }
