@@ -71,8 +71,11 @@ const WORDS: Record<Lang, Words> = {
     // what the tool had returned, said it had never seen the image and took back its correct description; the same
     // words inside the tool result were not believed ("I should not follow the placeholder"). With the note right after
     // the message holding the image, it answered as intended. So each such message is followed by a short note.
+    // 2026-10-10, Haiku 5.5, tool images, 3 runs per language: it kept its answers and guessed nothing, but asked for
+    // the image by number in 2 of 3 Chinese runs (as an option) and in no English run; a question about a detail it
+    // never described got "I can't answer that". The note now says when to write "需要 IMG-xxx", and why.
     toolNote: "工具结果里的图片也一样：那次工具调用当时返回的是原图，你当时看到了；工具结果里的占位文字是后来才换上的，不是工具当时的返回。",
-    here: (list) => `上下文管理说明：上面这条消息里的 ${list} 当时是原图，你当时看过；你之前对它们的描述和据此做出的判断仍然有效，不要收回，也不要说成是猜测或编造。那里的占位文字是这次请求才换上的，不是当时的内容。被问到时，如实说现在看不到（被用户省略了），不要补充之前没说过的细节；需要时写“需要 IMG-xxx”。`,
+    here: (list) => `上下文管理说明：上面这条消息里的 ${list} 当时是原图，你当时看过；你之前对它们的描述和据此做出的判断仍然有效，不要收回，也不要说成是猜测或编造。那里的占位文字是这次请求才换上的，不是当时的内容。现在你看不到它们：被问到时，如实说现在看不到（被用户省略了），不要补充之前没说过的细节。问题得看其中某张图才能回答时，不要只说答不了，在回复里单独写一行“需要 IMG-xxx”（写出编号，几张就都写上）：用户看到这一行才知道该勾回哪张图，勾回后原图回到原处，你就能看着回答。`,
     hereAuto: (list) => `上下文管理说明：上面这条消息里的 ${list} 当时是原图，你当时看过；你之前对它们的描述和据此做出的判断仍然有效，不要收回，也不要说成是猜测或编造。那里的占位文字是这次请求才换上的（自动选图），不是当时的内容。之前说过的内容不够用时，调用 cam_view_image 取回原图；不要补充之前没说过的细节。`,
     listItem: (id, name, kind) => `${id}（${[name, kind].filter(Boolean).join("，")}）`,
     fetch: {
@@ -112,7 +115,7 @@ const WORDS: Record<Lang, Words> = {
     ].join("\n"),
     copy: (id) => `[Original of ${id}: fetched by the model with cam_view_image, included only in that turn, now omitted]`,
     toolNote: "The same holds for images in tool results: the tool call returned the original image at the time and you saw it; a placeholder inside a tool result was put there later, it is not what the tool returned.",
-    here: (list) => `Context management note: in the message above, ${list} were original images at the time, and you looked at them then; what you said about them and the judgments you based on it remain valid, so do not take them back or call them guesses or made up. The placeholder text there was put in only for this request; it is not what was there at the time. If asked, say truthfully that you cannot see them now (the user left them out), and do not add details you did not mention before; if you need one, write "need IMG-xxx".`,
+    here: (list) => `Context management note: in the message above, ${list} were original images at the time, and you looked at them then; what you said about them and the judgments you based on it remain valid, so do not take them back or call them guesses or made up. The placeholder text there was put in only for this request; it is not what was there at the time. You cannot see them now: if asked, say so truthfully (the user left them out), and do not add details you did not mention before. When a question can only be answered by looking at one of them, do not just say you cannot answer; write a line "need IMG-xxx" in your reply (with its number; list each one needed): that line is how the user learns which image to check again, and once they do, the original comes back in its place and you can answer from it.`,
     hereAuto: (list) => `Context management note: in the message above, ${list} were original images at the time, and you looked at them then; what you said about them and the judgments you based on it remain valid, so do not take them back or call them guesses or made up. The placeholder text there was put in only for this request (automatic image selection); it is not what was there at the time. When what you said before is not enough, fetch the original with cam_view_image; do not add details you did not mention before.`,
     listItem: (id, name, kind) => `${id} (${[name, kind].filter(Boolean).join(", ")})`,
     fetch: {
